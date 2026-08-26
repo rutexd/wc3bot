@@ -214,10 +214,29 @@ async fn show_pinned(
     text: String,
     kb: InlineKeyboardMarkup,
 ) -> ResponseResult<Option<MessageId>> {
-    let _ = bot.unpin_chat_message(chat_id).await;
     let mid = show(bot.clone(), chat_id, message_id, text, kb).await?;
     if let Some(id) = mid {
-        let _ = bot.pin_chat_message(chat_id, id).await;
+        // Закрепляем только если в чате вообще нет закреплённого сообщения,
+        // чтобы не спамить сервисными сообщениями о пинне при каждом выборе меню.
+        // - Если сообщение отредактировано (message_id == Some(id)) и оно уже закреплено — не трогаем.
+        // - Если отправлено новое сообщение (message_id is None или edit не удался) — пиним только когда пина нет.
+        // - Если закреп был снят вручную и теперь пина нет — отредактированное сообщение тоже закрепим.
+        let already_pinned = match bot.get_chat(chat_id).await {
+            Ok(chat) => {
+                if chat.is_private() {
+                    true // в личке пинить не нужно — бот API это не поддерживает и нет спама сервисными сообщениями
+                } else {
+                    chat.pinned_message.is_some()
+                }
+            }
+            Err(_) => true, // не удалось проверить — безопаснее не пинить, чтобы не спамить
+        };
+        if !already_pinned {
+            let _ = bot
+                .pin_chat_message(chat_id, id)
+                .disable_notification(true)
+                .await;
+        }
     }
     Ok(mid)
 }
