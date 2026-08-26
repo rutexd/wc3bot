@@ -1,0 +1,12 @@
+design.md
+/target
+/Cargo.lock
+*.exe
+*.pdb
+config.toml
+*.eml
+*.log
+.vscode
+data
+.env
+wc3bot.db

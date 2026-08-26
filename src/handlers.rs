@@ -1,0 +1,459 @@
+use crate::db::{self, Db};
+use crate::loc::{tr, T};
+use futures::future::BoxFuture;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+use teloxide::{
+    prelude::*,
+    types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId},
+};
+
+const MAX_PATTERN_LEN: usize = 64;
+
+#[derive(Debug, Clone)]
+pub enum Pending {
+    AddMap,
+    AddHost,
+    Rename(i64),
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: Arc<Db>,
+    pub pending: Arc<Mutex<HashMap<i64, Pending>>>,
+}
+
+impl AppState {
+    pub fn new(db: Arc<Db>) -> Self {
+        Self {
+            db,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn take_pending(&self, chat_id: i64) -> Option<Pending> {
+        self.pending.lock().unwrap().remove(&chat_id)
+    }
+
+    pub fn set_pending(&self, chat_id: i64, p: Pending) {
+        self.pending.lock().unwrap().insert(chat_id, p);
+    }
+
+    pub fn clear_pending(&self, chat_id: i64) {
+        self.pending.lock().unwrap().remove(&chat_id);
+    }
+}
+
+fn btn(text: &str, data: &str) -> InlineKeyboardButton {
+    InlineKeyboardButton::callback(text.to_string(), data.to_string())
+}
+
+fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMarkup {
+    let notif_label = if state.db.notifications_enabled(uid) {
+        t.btn_notif_on
+    } else {
+        t.btn_notif_off
+    };
+    InlineKeyboardMarkup::new(vec![
+        vec![btn(t.btn_maps, "maps"), btn(t.btn_status, "status")],
+        vec![btn(t.btn_add_map, "addmap"), btn(t.btn_add_host, "addhost")],
+        vec![btn(notif_label, "notif"), btn(t.btn_lang, "lang")],
+    ])
+}
+
+fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
+    let notif = if db.notifications_enabled(uid) {
+        t.st_enabled
+    } else {
+        t.st_disabled
+    };
+    let subs = db.list_subs(uid);
+    let active: Vec<&db::Sub> = subs.iter().filter(|s| s.enabled).collect();
+    let mut text = format!(
+        "{}\n\n{}: {}\n{}: {}\n{}: {}",
+        t.st_hdr,
+        t.st_notifications,
+        notif,
+        t.st_total,
+        subs.len(),
+        t.st_active_count,
+        active.len()
+    );
+    if active.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(t.st_no_active);
+    } else {
+        text.push_str("\n\n");
+        text.push_str(t.st_active_list);
+        for s in active {
+            text.push_str(&format!("\n• {}", s.pattern));
+        }
+    }
+    text
+}
+
+fn kind_label(s: &db::Sub, t: &'static T) -> &'static str {
+    if s.kind == db::KIND_HOST {
+        t.kind_host
+    } else {
+        t.kind_map
+    }
+}
+
+fn maps_text(state: &AppState, uid: i64, t: &'static T) -> String {
+    let subs = state.db.list_subs(uid);
+    if subs.is_empty() {
+        return t.maps_empty.into();
+    }
+    let mut text = t.maps_title.replace("{n}", &subs.len().to_string());
+    text.push_str(t.maps_hint);
+    for s in &subs {
+        let icon = if s.enabled { "✅" } else { "❌" };
+        text.push_str(&format!("\n{} {} {}", icon, kind_label(s, t), s.pattern));
+    }
+    text
+}
+
+fn maps_kb(subs: &[db::Sub], t: &'static T) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = subs
+        .iter()
+        .map(|s| {
+            vec![btn(
+                &format!("{} {}", kind_label(s, t), s.pattern),
+                &format!("map:{}", s.id),
+            )]
+        })
+        .collect();
+    rows.push(vec![
+        btn(t.btn_add_map, "addmap"),
+        btn(t.btn_add_host, "addhost"),
+    ]);
+    rows.push(vec![btn(t.btn_main_menu, "menu")]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+fn sub_view(s: &db::Sub, t: &'static T) -> (String, InlineKeyboardMarkup) {
+    let status = if s.enabled { t.sub_enabled } else { t.sub_disabled };
+    let is_host = s.kind == db::KIND_HOST;
+    let text = format!(
+        "{} #{}\n\n{}: {}\n{}: {}\n{}: {}\n\n{}",
+        t.sub_id.replace("{id}", &s.id.to_string()),
+        "",
+        t.sub_name,
+        s.pattern,
+        t.sub_type,
+        if is_host { t.kind_host } else { t.kind_map },
+        t.sub_status,
+        status,
+        if is_host { t.sub_desc_host } else { t.sub_desc_map },
+    );
+    let toggle_label = if s.enabled { t.btn_disable } else { t.btn_enable };
+    let kb = InlineKeyboardMarkup::new(vec![
+        vec![btn(toggle_label, &format!("toggle:{}", s.id))],
+        vec![
+            btn(t.btn_rename, &format!("rename:{}", s.id)),
+            btn(t.btn_delete, &format!("del:{}", s.id)),
+        ],
+        vec![btn(t.btn_to_list, "maps"), btn(t.btn_menu, "menu")],
+    ]);
+    (text, kb)
+}
+
+/// Клавиатура для режимов ввода текста (добавление/переименование).
+fn cancel_kb(t: &'static T) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![btn(t.btn_cancel, "cancel")]])
+}
+
+async fn show(
+    bot: Bot,
+    chat_id: ChatId,
+    message_id: Option<MessageId>,
+    text: String,
+    kb: InlineKeyboardMarkup,
+) -> ResponseResult<()> {
+    if let Some(mid) = message_id {
+        if bot
+            .edit_message_text(chat_id, mid, text.clone())
+            .reply_markup(kb.clone())
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    bot.send_message(chat_id, text).reply_markup(kb).await?;
+    Ok(())
+}
+
+/// Boxed, чтобы не раздувать комбинированный future dptree (переполнение стека в debug-сборке).
+pub fn handle_message(
+    bot: Bot,
+    state: AppState,
+    msg: Message,
+) -> BoxFuture<'static, ResponseResult<()>> {
+    Box::pin(async move {
+        let Some(text) = msg.text() else { return Ok(()) };
+        let chat_id = msg.chat.id;
+        let uid = chat_id.0;
+        state.db.ensure_user(uid);
+        let lang = state.db.lang(uid);
+        let t = tr(lang);
+        let trimmed = text.trim();
+
+        if trimmed.starts_with('/') {
+            state.clear_pending(uid);
+            match trimmed.split_whitespace().next().unwrap_or("") {
+                "/start" | "/menu" | "/help" => {
+                    show(
+                        bot.clone(),
+                        chat_id,
+                        None,
+                        t.welcome.into(),
+                        main_menu_kb(&state, uid, t),
+                    )
+                    .await?;
+                }
+                "/maps" => {
+                    let subs = state.db.list_subs(uid);
+                    show(
+                        bot.clone(),
+                        chat_id,
+                        None,
+                        maps_text(&state, uid, t),
+                        maps_kb(&subs, t),
+                    )
+                    .await?;
+                }
+                "/status" => {
+                    show(
+                        bot.clone(),
+                        chat_id,
+                        None,
+                        status_text(&state.db, uid, t),
+                        main_menu_kb(&state, uid, t),
+                    )
+                    .await?;
+                }
+                "/cancel" => {
+                    show(
+                        bot.clone(),
+                        chat_id,
+                        None,
+                        t.msg_cancelled.into(),
+                        main_menu_kb(&state, uid, t),
+                    )
+                    .await?;
+                }
+                "/stop" => {
+                    state.clear_pending(uid);
+                    state.db.delete_user(uid);
+                    bot.send_message(chat_id, t.msg_stop).await?;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        match state.take_pending(uid) {
+            Some(Pending::AddMap) => {
+                add_sub_flow(bot, state, chat_id, db::KIND_MAP, trimmed, "🗺", t).await;
+            }
+            Some(Pending::AddHost) => {
+                add_sub_flow(bot, state, chat_id, db::KIND_HOST, trimmed, "👤", t).await;
+            }
+            Some(Pending::Rename(id)) => {
+                let new_name: String = trimmed.chars().take(MAX_PATTERN_LEN).collect();
+                if new_name.trim().is_empty() {
+                    bot.send_message(chat_id, t.msg_empty_name)
+                        .reply_markup(cancel_kb(t))
+                        .await?;
+                } else if state.db.rename_sub(id, new_name.trim()).is_ok() {
+                    state.clear_pending(uid);
+                    if let Some(s) = state.db.get_sub(id) {
+                        let (text, kb) = sub_view(&s, t);
+                        show(bot, chat_id, None, text, kb).await?;
+                    }
+                } else {
+                    bot.send_message(chat_id, t.msg_rename_fail)
+                        .reply_markup(cancel_kb(t))
+                        .await?;
+                }
+            }
+            None => {
+                bot.send_message(chat_id, t.msg_use_menu).await?;
+            }
+        }
+        Ok(())
+    })
+}
+
+async fn add_sub_flow(
+    bot: Bot,
+    state: AppState,
+    chat_id: ChatId,
+    kind: &'static str,
+    input: &str,
+    icon: &str,
+    t: &'static T,
+) {
+    let name: String = input.chars().take(MAX_PATTERN_LEN).collect();
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        let _ = bot
+            .send_message(chat_id, t.msg_empty_name)
+            .reply_markup(cancel_kb(t))
+            .await;
+        return;
+    }
+    let subs = state.db.list_subs(chat_id.0);
+    let (text, kb) = match state.db.add_sub(chat_id.0, kind, &name) {
+        Ok(true) => (
+            t.msg_added.replace("{icon}", icon).replace("{name}", &name),
+            maps_kb(&subs, t),
+        ),
+        _ => (t.msg_duplicate.into(), maps_kb(&subs, t)),
+    };
+    let _ = show(bot, chat_id, None, text, kb).await;
+}
+
+/// Boxed, чтобы не раздувать комбинированный future dptree (переполнение стека в debug-сборке).
+pub fn handle_callback(
+    bot: Bot,
+    state: AppState,
+    cq: CallbackQuery,
+) -> BoxFuture<'static, ResponseResult<()>> {
+    Box::pin(async move {
+        let _ = bot.answer_callback_query(cq.id.clone()).await;
+        let Some(data) = cq.data.as_deref() else { return Ok(()) };
+        let uid = cq.from.id.0 as i64;
+        state.db.ensure_user(uid);
+        let chat_id = ChatId(uid);
+        let mid: Option<MessageId> = cq.regular_message().map(|m| m.id);
+
+        match data {
+            "lang" => {
+                let new_lang = state.db.lang(uid).toggled();
+                state.db.set_lang(uid, new_lang.code());
+                // fall through to menu redraw below with the new language
+                let t = tr(new_lang);
+                show(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t)).await?;
+            }
+            _ => {
+                let lang = state.db.lang(uid);
+                let t = tr(lang);
+                route_callback(bot, state, data, uid, chat_id, mid, t).await?;
+            }
+        }
+        Ok(())
+    })
+}
+
+async fn route_callback(
+    bot: Bot,
+    state: AppState,
+    data: &str,
+    uid: i64,
+    chat_id: ChatId,
+    mid: Option<MessageId>,
+    t: &'static T,
+) -> ResponseResult<()> {
+    match data {
+        "menu" => {
+            show(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t)).await?;
+        }
+        "maps" => {
+            let subs = state.db.list_subs(uid);
+            show(bot, chat_id, mid, maps_text(&state, uid, t), maps_kb(&subs, t)).await?;
+        }
+        "status" | "notif" => {
+            if data == "notif" {
+                let on = !state.db.notifications_enabled(uid);
+                state.db.set_notifications(uid, on);
+            }
+            show(
+                bot,
+                chat_id,
+                mid,
+                status_text(&state.db, uid, t),
+                main_menu_kb(&state, uid, t),
+            )
+            .await?;
+        }
+        "addmap" => {
+            state.set_pending(uid, Pending::AddMap);
+            bot.send_message(chat_id, t.prompt_add_map)
+                .reply_markup(cancel_kb(t))
+                .await?;
+        }
+        "addhost" => {
+            state.set_pending(uid, Pending::AddHost);
+            bot.send_message(chat_id, t.prompt_add_host)
+                .reply_markup(cancel_kb(t))
+                .await?;
+        }
+        "cancel" => {
+            state.clear_pending(uid);
+            show(
+                bot,
+                chat_id,
+                mid,
+                t.msg_cancelled.into(),
+                main_menu_kb(&state, uid, t),
+            )
+            .await?;
+        }
+        d => {
+            let mut parts = d.splitn(2, ':');
+            let op = parts.next().unwrap_or("");
+            let Some(id) = parts.next().and_then(|v| v.parse::<i64>().ok()) else {
+                return Ok(());
+            };
+            match op {
+                "map" => {
+                    if let Some(s) = owned_sub(&state, id, uid) {
+                        let (text, kb) = sub_view(&s, t);
+                        show(bot, chat_id, mid, text, kb).await?;
+                    }
+                }
+                "toggle" => {
+                    if let Some(s) = owned_sub(&state, id, uid) {
+                        state.db.set_sub_enabled(id, !s.enabled);
+                        let s = state.db.get_sub(id).unwrap();
+                        let (text, kb) = sub_view(&s, t);
+                        show(bot, chat_id, mid, text, kb).await?;
+                    }
+                }
+                "rename" => {
+                    if let Some(s) = owned_sub(&state, id, uid) {
+                        state.set_pending(uid, Pending::Rename(id));
+                        bot.send_message(chat_id, t.prompt_rename.replace("{name}", &s.pattern))
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                }
+                "del" => {
+                    if let Some(s) = owned_sub(&state, id, uid) {
+                        state.db.delete_sub(id);
+                        let subs = state.db.list_subs(uid);
+                        show(
+                            bot,
+                            chat_id,
+                            mid,
+                            t.msg_deleted.replace("{name}", &s.pattern),
+                            maps_kb(&subs, t),
+                        )
+                        .await?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn owned_sub(state: &AppState, id: i64, uid: i64) -> Option<db::Sub> {
+    state.db.get_sub(id).filter(|s| s.chat_id == uid)
+}

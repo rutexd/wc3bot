@@ -1,0 +1,210 @@
+mod api;
+mod db;
+mod handlers;
+mod loc;
+mod norm;
+
+use anyhow::{bail, Context, Result};
+use std::{collections::HashSet, env, time::Duration};
+use teloxide::{prelude::*, types::ChatId};
+
+fn sanitize_name(name: &str) -> String {
+    name.trim_start_matches('@')
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect::<String>()
+        .to_uppercase()
+}
+
+/// Token lookup order:
+///   1. --token / -t CLI arg
+///   2. <BOTNAME>_TOKEN from environment or dotenv files (.env, .<botname>, .env.<botname>)
+///   3. TELEGRAM_BOT_TOKEN
+///   4. WC3BOT_TOKEN
+///   5. BOT_TOKEN
+///
+/// Bot name: --name/-n arg, or first positional that is not a token.
+fn resolve_token() -> Result<(String, String)> {
+    let mut args = env::args().skip(1);
+    let mut name: Option<String> = None;
+    let mut token: Option<String> = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--token" | "-t" => token = args.next(),
+            "--name" | "-n" => name = args.next(),
+            _ => {
+                if arg.contains(':') || arg.chars().all(|c| c.is_ascii_digit()) {
+                    token = Some(arg);
+                } else if name.is_none() {
+                    name = Some(arg);
+                }
+            }
+        }
+    }
+
+    // dotenv files
+    let _ = dotenvy::dotenv();
+    if let Some(n) = &name {
+        let base = n.trim_start_matches('@');
+        for f in [format!(".{base}"), format!(".env.{base}")] {
+            if std::path::Path::new(&f).is_file() {
+                let _ = dotenvy::from_filename(&f);
+            }
+        }
+    }
+
+    if let Some(t) = token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        return Ok((t, "аргумент командной строки".into()));
+    }
+
+    let mut tried: Vec<String> = Vec::new();
+    if let Some(n) = &name {
+        let key = format!("{}_TOKEN", sanitize_name(n));
+        tried.push(key.clone());
+        if let Ok(v) = env::var(&key) {
+            if !v.trim().is_empty() {
+                return Ok((v.trim().to_string(), format!("env {key}")));
+            }
+        }
+    }
+    for key in ["TELEGRAM_BOT_TOKEN", "WC3BOT_TOKEN", "BOT_TOKEN"] {
+        tried.push(key.to_string());
+        if let Ok(v) = env::var(key) {
+            if !v.trim().is_empty() {
+                return Ok((v.trim().to_string(), format!("env {key}")));
+            }
+        }
+    }
+    bail!("токен не найден. Задай его через --token, или в переменной {} (можно в файле .env)", tried.join(" / "))
+}
+
+fn main() {
+    let child = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(run)
+        .expect("не удалось создать поток");
+    match child.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            log::error!("{e:#}");
+            std::process::exit(1);
+        }
+        Err(_) => std::process::exit(1),
+    }
+}
+
+fn run() -> Result<()> {
+    pretty_env_logger::formatted_builder()
+        .filter_level(log::LevelFilter::Info)
+        .init();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()
+        .context("не удалось создать tokio runtime")?;
+    rt.block_on(run_async())
+}
+
+async fn run_async() -> Result<()> {
+    let (token, source) = resolve_token()?;
+    log::info!("токен загружен из: {source}");
+
+    let bot = teloxide::Bot::new(token);
+    let me = bot
+        .get_me()
+        .await
+        .context("не удалось подключиться к Telegram (проверь токен)")?;
+    log::info!("бот @{} запущен", me.username());
+
+    let database = std::sync::Arc::new(db::Db::open("wc3bot.db")?);
+
+    {
+        let bot = bot.clone();
+        let database = database.clone();
+        tokio::spawn(async move {
+            if let Err(e) = poller(bot, database).await {
+                log::error!("poller остановлен: {e:#}");
+            }
+        });
+    }
+
+    let state = handlers::AppState::new(database);
+    let handler = teloxide::dptree::entry()
+        .branch(Update::filter_message().endpoint(handlers::handle_message))
+        .branch(Update::filter_callback_query().endpoint(handlers::handle_callback));
+
+    Dispatcher::builder(bot, handler)
+        .dependencies(teloxide::dptree::deps![state])
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch()
+        .await;
+    Ok(())
+}
+
+async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("wc3bot/0.1")
+        .build()?;
+
+    let interval = Duration::from_secs(
+        env::var("POLL_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15),
+    );
+
+    // Seed seen ids without notifying on startup.
+    let mut seen: HashSet<i64> = api::fetch_gamelist(&client)
+        .await
+        .context("первичный опрос gamelist не удался")?
+        .into_iter()
+        .map(|g| g.id)
+        .collect();
+    log::info!("poller: инициализировано {} известных игр", seen.len());
+
+    loop {
+        tokio::time::sleep(interval).await;
+        let games = match api::fetch_gamelist(&client).await {
+            Ok(g) => g,
+            Err(e) => {
+                log::warn!("poller: ошибка запроса: {e:#}");
+                continue;
+            }
+        };
+
+        for game in games {
+            if !seen.insert(game.id) {
+                continue;
+            }
+            let text = game.notification_text();
+            for active in database.all_active_subs() {
+                let matched = if active.sub.kind == db::KIND_HOST {
+                    norm::matches(&active.sub.pattern, &game.host)
+                } else {
+                    norm::matches(&active.sub.pattern, &game.map)
+                        || norm::matches(&active.sub.pattern, &game.name)
+                };
+                if matched {
+                    if let Err(e) = bot.send_message(ChatId(active.chat_id), text.clone()).await {
+                        log::warn!(
+                            "poller: не удалось отправить уведомление в {}: {e}",
+                            active.chat_id
+                        );
+                    }
+                }
+            }
+        }
+
+        // Keep the set bounded.
+        if seen.len() > 100_000 {
+            seen.clear();
+            if let Ok(games) = api::fetch_gamelist(&client).await {
+                seen.extend(games.into_iter().map(|g| g.id));
+            }
+        }
+    }
+}
