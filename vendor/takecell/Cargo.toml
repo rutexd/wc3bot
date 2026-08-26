@@ -1,8 +1,8 @@
 [package]
 name = "takecell"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2018"
-description = "A cell type which value can only be taken once (vendored; upstream 0.1.2 requires rustc >= 1.96)"
+description = "A cell type which value can only be taken once (vendored fork without the rustc >= 1.96 requirement)"
 license = "MIT"
 repository = "https://github.com/wafflelapkin/takecell"
 
