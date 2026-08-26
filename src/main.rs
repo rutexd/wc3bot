@@ -182,11 +182,10 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
             }
             let text = game.notification_text();
             for active in database.all_active_subs() {
-                let matched = if active.sub.kind == db::KIND_HOST {
-                    norm::matches(&active.sub.pattern, &game.host)
-                } else {
-                    norm::matches(&active.sub.pattern, &game.map)
-                        || norm::matches(&active.sub.pattern, &game.name)
+                let matched = match active.sub.kind.as_str() {
+                    db::KIND_HOST => norm::matches(&active.sub.pattern, &game.host),
+                    db::KIND_NAME => norm::matches(&active.sub.pattern, &game.name),
+                    _ => norm::matches(&active.sub.pattern, &game.map),
                 };
                 if matched {
                     if let Err(e) = bot.send_message(ChatId(active.chat_id), text.clone()).await {

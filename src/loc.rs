@@ -34,6 +34,8 @@ pub struct T {
     pub btn_status: &'static str,
     pub btn_add_map: &'static str,
     pub btn_add_host: &'static str,
+    pub btn_add_name: &'static str,
+    pub btn_add_all: &'static str,
     pub btn_notif_on: &'static str,
     pub btn_notif_off: &'static str,
     pub btn_lang: &'static str,
@@ -45,6 +47,7 @@ pub struct T {
     pub btn_menu: &'static str,
     pub btn_main_menu: &'static str,
     pub btn_cancel: &'static str,
+    pub btn_done: &'static str,
     // Welcome / status
     pub welcome: &'static str,
     pub st_hdr: &'static str,
@@ -68,11 +71,15 @@ pub struct T {
     pub sub_disabled: &'static str,
     pub sub_desc_map: &'static str,
     pub sub_desc_host: &'static str,
+    pub sub_desc_name: &'static str,
     pub kind_map: &'static str,
     pub kind_host: &'static str,
+    pub kind_name: &'static str,
     // Prompts
     pub prompt_add_map: &'static str,
     pub prompt_add_host: &'static str,
+    pub prompt_add_name: &'static str,
+    pub prompt_add_all: &'static str,
     pub prompt_rename: &'static str, // {name}
     // Messages
     pub msg_cancelled: &'static str,
@@ -83,13 +90,16 @@ pub struct T {
     pub msg_deleted: &'static str, // {name}
     pub msg_use_menu: &'static str,
     pub msg_stop: &'static str,
+    pub msg_add_more: &'static str,
 }
 
 const EN: T = T {
     btn_maps: "🗺 My maps",
     btn_status: "📊 Status",
     btn_add_map: "➕ Map",
-    btn_add_host: "👤 Host",
+    btn_add_host: "➕ 👤 Host",
+    btn_add_name: "➕ 📛 Name",
+    btn_add_all: "➕ ✨ All types",
     btn_notif_on: "🔔 Notifications: ✅ on",
     btn_notif_off: "🔕 Notifications: ❌ off",
     btn_lang: "🌐 Language: English",
@@ -101,6 +111,7 @@ const EN: T = T {
     btn_menu: "🏠 Menu",
     btn_main_menu: "🏠 Main menu",
     btn_cancel: "↩️ Cancel",
+    btn_done: "✅ Done",
     welcome: "👋 Hi! I watch WarCraft 3 lobbies on wc3stats.\n\n\
               Add a subscription for a map or a host — I'll message you when a new lobby appears.\n\n\
               Names are matched case- and symbol-insensitively: \
@@ -124,10 +135,14 @@ const EN: T = T {
     sub_disabled: "❌ Disabled",
     sub_desc_map: "Notifications are sent when a new lobby's map name contains this name (case- and symbol-insensitive).",
     sub_desc_host: "Notifications are sent when a new lobby's host name contains this name (case- and symbol-insensitive).",
+    sub_desc_name: "Notifications are sent when a new lobby's game name contains this name (case- and symbol-insensitive).",
     kind_map: "🗺 Map",
     kind_host: "👤 Host",
+    kind_name: "📛 Name",
     prompt_add_map: "🗺 Send me the map name to track.\n\nExamples: pudge, chs, legion td",
     prompt_add_host: "👤 Send me the host name to track.\n\nExamples: HellWolf#31976, hellwolf",
+    prompt_add_name: "📛 Send me the game name to track.\n\nExamples: dota, tavern, fun",
+    prompt_add_all: "✨ Send me a name — I'll subscribe you to map, host, and game name at once.",
     prompt_rename: "✏️ Current name: \u{00ab}{name}\u{00bb}\n\nSend me the new name:",
     msg_cancelled: "↩️ Cancelled.",
     msg_empty_name: "⚠️ Name cannot be empty. Try again:",
@@ -137,13 +152,16 @@ const EN: T = T {
     msg_deleted: "🗑 Subscription \u{00ab}{name}\u{00bb} deleted.",
     msg_use_menu: "🤔 Use the menu buttons or /start.",
     msg_stop: "👋 All your data has been deleted. /start to start over.",
+    msg_add_more: "Send another name or press Done to finish.",
 };
 
 const RU: T = T {
     btn_maps: "🗺 Мои карты",
     btn_status: "📊 Статус",
     btn_add_map: "➕ Карта",
-    btn_add_host: "👤 Хост",
+    btn_add_host: "➕ 👤 Хост",
+    btn_add_name: "➕ 📛 Название",
+    btn_add_all: "➕ ✨ Все типы",
     btn_notif_on: "🔔 Уведомления: ✅ вкл",
     btn_notif_off: "🔕 Уведомления: ❌ выкл",
     btn_lang: "🌐 Язык: Русский",
@@ -155,6 +173,7 @@ const RU: T = T {
     btn_menu: "🏠 Меню",
     btn_main_menu: "🏠 Главное меню",
     btn_cancel: "↩️ Отмена",
+    btn_done: "✅ Готово",
     welcome: "👋 Привет! Я слежу за игровыми лобби WarCraft 3 на wc3stats.\n\n\
               Добавь подписку на карту или хоста — и я пришлю уведомление, \
               когда появится новое лобби.\n\n\
@@ -179,10 +198,14 @@ const RU: T = T {
     sub_disabled: "❌ Выключена",
     sub_desc_map: "Уведомления приходят, когда имя карты в новом лобби содержит это название (без учёта регистра и символов).",
     sub_desc_host: "Уведомления приходят, когда имя хоста в новом лобби содержит это название (без учёта регистра и символов).",
+    sub_desc_name: "Уведомления приходят, когда название игры в новом лобби содержит это название (без учёта регистра и символов).",
     kind_map: "🗺 Карта",
     kind_host: "👤 Хост",
+    kind_name: "📛 Название",
     prompt_add_map: "🗺 Отправь название карты для отслеживания.\n\nПримеры: pudge, chs, legion td",
     prompt_add_host: "👤 Отправь имя хоста для отслеживания.\n\nПримеры: HellWolf#31976, hellwolf",
+    prompt_add_name: "📛 Отправь название игры для отслеживания.\n\nПримеры: dota, tavern, fun",
+    prompt_add_all: "✨ Отправь название — я подпишу на карту, хоста и название игры сразу.",
     prompt_rename: "✏️ Текущее название: «{name}»\n\nОтправь новое название:",
     msg_cancelled: "↩️ Отменено.",
     msg_empty_name: "⚠️ Название не может быть пустым. Попробуй ещё раз:",
@@ -192,6 +215,7 @@ const RU: T = T {
     msg_deleted: "🗑 Подписка «{name}» удалена.",
     msg_use_menu: "🤔 Используй кнопки меню или /start.",
     msg_stop: "👋 Все твои данные удалены. /start — начать заново.",
+    msg_add_more: "Отправь ещё одно название или нажми Готово.",
 };
 
 pub fn tr(lang: Lang) -> &'static T {

@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 pub const KIND_MAP: &str = "map";
 pub const KIND_HOST: &str = "host";
+pub const KIND_NAME: &str = "name";
 
 #[derive(Debug, Clone)]
 pub struct Sub {
