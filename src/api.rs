@@ -27,13 +27,12 @@ impl Game {
 
     pub fn notification_text(&self) -> String {
         format!(
-            "🎮 Новая игра!\n\n\
-             🗺️ Карта: {}\n\
+            "🗺️ Карта: {}\n\
              🏠 Хост: {}\n\
              📛 Название: {}\n\
              👥 Игроки: {}/{}\n\
              🌍 Сервер: {}\n\
-             🆔 ID игры: {}",
+             🆔 ID: {}",
             self.map,
             self.host,
             if self.name.trim().is_empty() { "—" } else { &self.name },

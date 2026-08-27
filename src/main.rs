@@ -130,7 +130,7 @@ async fn run_async() -> Result<()> {
         });
     }
 
-    let state = handlers::AppState::new(database);
+    let state = handlers::AppState::new(database, me.id);
     let handler = teloxide::dptree::entry()
         .branch(Update::filter_message().endpoint(handlers::handle_message))
         .branch(Update::filter_callback_query().endpoint(handlers::handle_callback));

@@ -56,7 +56,6 @@ pub struct T {
     pub st_disabled: &'static str,
     pub st_total: &'static str,
     pub st_active_count: &'static str,
-    pub st_active_list: &'static str,
     pub st_no_active: &'static str,
     // Maps list
     pub maps_title: &'static str, // {n}
@@ -122,7 +121,6 @@ const EN: T = T {
     st_disabled: "❌ Disabled",
     st_total: "Total maps",
     st_active_count: "Active maps",
-    st_active_list: "Active maps:",
     st_no_active: "No active maps",
     maps_title: "🗺 My subscriptions ({n}):",
     maps_hint: "\n\nTap a subscription to configure it.",
@@ -185,7 +183,6 @@ const RU: T = T {
     st_disabled: "❌ Выключены",
     st_total: "Всего карт",
     st_active_count: "Активных карт",
-    st_active_list: "Активные карты:",
     st_no_active: "Активных карт нет",
     maps_title: "🗺 Мои подписки ({n}):",
     maps_hint: "\n\nНажми на подписку, чтобы настроить её.",

@@ -7,7 +7,7 @@ use std::{
 };
 use teloxide::{
     prelude::*,
-    types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId},
+    types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, UserId},
 };
 
 const MAX_PATTERN_LEN: usize = 64;
@@ -25,13 +25,15 @@ pub enum Pending {
 pub struct AppState {
     pub db: Arc<Db>,
     pub pending: Arc<Mutex<HashMap<i64, Pending>>>,
+    pub bot_id: UserId,
 }
 
 impl AppState {
-    pub fn new(db: Arc<Db>) -> Self {
+    pub fn new(db: Arc<Db>, bot_id: UserId) -> Self {
         Self {
             db,
             pending: Arc::new(Mutex::new(HashMap::new())),
+            bot_id,
         }
     }
 
@@ -89,10 +91,20 @@ fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
         text.push_str("\n\n");
         text.push_str(t.st_no_active);
     } else {
-        text.push_str("\n\n");
-        text.push_str(t.st_active_list);
-        for s in active {
-            text.push_str(&format!("\n• {}", s.pattern));
+        let kinds: [(&str, &str); 3] = [
+            (db::KIND_MAP, t.kind_map),
+            (db::KIND_HOST, t.kind_host),
+            (db::KIND_NAME, t.kind_name),
+        ];
+        for (kind, label) in kinds {
+            let items: Vec<&db::Sub> = active.iter().copied().filter(|s| s.kind == kind).collect();
+            if items.is_empty() {
+                continue;
+            }
+            text.push_str(&format!("\n\n{}:", label));
+            for s in items {
+                text.push_str(&format!("\n• {}", s.pattern));
+            }
         }
     }
     text
@@ -213,25 +225,25 @@ async fn show_pinned(
     message_id: Option<MessageId>,
     text: String,
     kb: InlineKeyboardMarkup,
+    bot_id: UserId,
 ) -> ResponseResult<Option<MessageId>> {
     let mid = show(bot.clone(), chat_id, message_id, text, kb).await?;
     if let Some(id) = mid {
-        // Закрепляем только если в чате вообще нет закреплённого сообщения,
-        // чтобы не спамить сервисными сообщениями о пинне при каждом выборе меню.
-        // - Если сообщение отредактировано (message_id == Some(id)) и оно уже закреплено — не трогаем.
-        // - Если отправлено новое сообщение (message_id is None или edit не удался) — пиним только когда пина нет.
-        // - Если закреп был снят вручную и теперь пина нет — отредактированное сообщение тоже закрепим.
-        let already_pinned = match bot.get_chat(chat_id).await {
+        let is_new = message_id != Some(id);
+        let already_pinned_by_me = match bot.get_chat(chat_id).await {
             Ok(chat) => {
                 if chat.is_private() {
-                    true // в личке пинить не нужно — бот API это не поддерживает и нет спама сервисными сообщениями
+                    true
                 } else {
-                    chat.pinned_message.is_some()
+                    match chat.pinned_message {
+                        Some(msg) => msg.from.as_ref().map_or(false, |u| u.id == bot_id),
+                        None => false,
+                    }
                 }
             }
-            Err(_) => true, // не удалось проверить — безопаснее не пинить, чтобы не спамить
+            Err(_) => true,
         };
-        if !already_pinned {
+        if is_new || !already_pinned_by_me {
             let _ = bot
                 .pin_chat_message(chat_id, id)
                 .disable_notification(true)
@@ -260,12 +272,14 @@ pub fn handle_message(
             state.clear_pending(uid);
             match trimmed.split_whitespace().next().unwrap_or("") {
                 "/start" | "/menu" | "/help" => {
+                    println!("[start] uid={uid} chat={chat_id}");
                     show_pinned(
                         bot.clone(),
                         chat_id,
                         None,
                         t.welcome.into(),
                         main_menu_kb(&state, uid, t),
+                        state.bot_id,
                     )
                     .await?;
                 }
@@ -287,6 +301,7 @@ pub fn handle_message(
                         None,
                         status_text(&state.db, uid, t),
                         main_menu_kb(&state, uid, t),
+                        state.bot_id,
                     )
                     .await?;
                 }
@@ -298,6 +313,7 @@ pub fn handle_message(
                         None,
                         t.msg_cancelled.into(),
                         main_menu_kb(&state, uid, t),
+                        state.bot_id,
                     )
                     .await?;
                 }
@@ -382,14 +398,17 @@ async fn add_sub_flow(
     }
     let uid = chat_id.0;
     let (text, kb) = match state.db.add_sub(uid, kind, &name) {
-        Ok(true) => (
-            format!(
-                "{}\n\n{}",
-                t.msg_added.replace("{icon}", icon).replace("{name}", &name),
-                t.msg_add_more
-            ),
-            done_kb(t),
-        ),
+        Ok(true) => {
+            println!("[add] uid={uid} kind={kind} name={name}");
+            (
+                format!(
+                    "{}\n\n{}",
+                    t.msg_added.replace("{icon}", icon).replace("{name}", &name),
+                    t.msg_add_more
+                ),
+                done_kb(t),
+            )
+        }
         _ => (
             format!("{}\n\n{}", t.msg_duplicate, t.msg_add_more),
             done_kb(t),
@@ -420,6 +439,7 @@ async fn add_all_flow(
     let mut added = Vec::new();
     for (kind, icon) in &kinds {
         if let Ok(true) = state.db.add_sub(uid, kind, &name) {
+            println!("[add] uid={uid} kind={kind} name={name}");
             added.push(format!("{} {}", icon, kind_label_str(kind, t)));
         }
     }
@@ -452,8 +472,10 @@ pub fn handle_callback(
         let Some(data) = cq.data.as_deref() else { return Ok(()) };
         let uid = cq.from.id.0 as i64;
         state.db.ensure_user(uid);
-        let chat_id = ChatId(uid);
-        let mid: Option<MessageId> = cq.regular_message().map(|m| m.id);
+        let (chat_id, mid) = match cq.regular_message() {
+            Some(m) => (m.chat.id, Some(m.id)),
+            None => (ChatId(uid), None),
+        };
 
         match data {
             "lang" => {
@@ -461,7 +483,7 @@ pub fn handle_callback(
                 state.db.set_lang(uid, new_lang.code());
                 // fall through to menu redraw below with the new language
                 let t = tr(new_lang);
-                show_pinned(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t)).await?;
+                show_pinned(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t), state.bot_id).await?;
             }
             _ => {
                 let lang = state.db.lang(uid);
@@ -484,7 +506,7 @@ async fn route_callback(
 ) -> ResponseResult<()> {
     match data {
         "menu" => {
-            show_pinned(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t)).await?;
+            show_pinned(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t), state.bot_id).await?;
         }
         "maps" => {
             let subs = state.db.list_subs(uid);
@@ -501,6 +523,7 @@ async fn route_callback(
                 mid,
                 status_text(&state.db, uid, t),
                 main_menu_kb(&state, uid, t),
+                state.bot_id,
             )
             .await?;
         }
@@ -536,6 +559,7 @@ async fn route_callback(
                 mid,
                 t.msg_cancelled.into(),
                 main_menu_kb(&state, uid, t),
+                state.bot_id,
             )
             .await?;
         }
@@ -582,6 +606,7 @@ async fn route_callback(
                 }
                 "del" => {
                     if let Some(s) = owned_sub(&state, id, uid) {
+                        println!("[del] uid={uid} id={id} name={}", s.pattern);
                         state.db.delete_sub(id);
                         let subs = state.db.list_subs(uid);
                         show(
