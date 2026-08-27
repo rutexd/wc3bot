@@ -244,6 +244,7 @@ async fn show_pinned(
             Err(_) => true,
         };
         if is_new || !already_pinned_by_me {
+            let _ = bot.unpin_chat_message(chat_id).await;
             let _ = bot
                 .pin_chat_message(chat_id, id)
                 .disable_notification(true)
