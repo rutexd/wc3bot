@@ -6,7 +6,11 @@ mod norm;
 mod pinger;
 
 use anyhow::{bail, Context, Result};
-use std::{collections::HashSet, env, time::{Duration, Instant}};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    time::Duration,
+};
 use teloxide::{prelude::*, types::ChatId};
 
 fn sanitize_name(name: &str) -> String {
@@ -145,6 +149,12 @@ async fn run_async() -> Result<()> {
     Ok(())
 }
 
+struct TrackedGame {
+    chat_id: ChatId,
+    message_id: teloxide::types::MessageId,
+    game: api::Game,
+}
+
 async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -155,7 +165,7 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
         env::var("POLL_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(15),
+            .unwrap_or(10),
     );
 
     // Seed seen ids without notifying on startup.
@@ -167,6 +177,9 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
         .collect();
     log::info!("poller: инициализировано {} известных игр", seen.len());
 
+    // game_id -> all tracked messages for that game
+    let mut tracked: HashMap<i64, Vec<TrackedGame>> = HashMap::new();
+
     loop {
         tokio::time::sleep(interval).await;
         let games = match api::fetch_gamelist(&client).await {
@@ -177,12 +190,12 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
             }
         };
 
+        // --- detect new games → notify & start tracking ---
         for game in &games {
             if !seen.insert(game.id) {
                 continue;
             }
 
-            let mut messages: Vec<pinger::PingerMsg> = Vec::new();
             for active in database.all_active_subs() {
                 let matched = match active.sub.kind.as_str() {
                     db::KIND_HOST => norm::matches(&active.sub.pattern, &game.host),
@@ -195,9 +208,10 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                         .await
                     {
                         Ok(m) => {
-                            messages.push(pinger::PingerMsg {
+                            tracked.entry(game.id).or_default().push(TrackedGame {
                                 chat_id: ChatId(active.chat_id),
                                 message_id: m.id,
+                                game: game.clone(),
                             });
                         }
                         Err(e) => {
@@ -209,20 +223,40 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                     }
                 }
             }
+        }
 
-            if !messages.is_empty() {
-                let game_clone = game.clone();
-                let bot_clone = bot.clone();
-                let client_clone = client.clone();
-                let started = Instant::now();
-                tokio::spawn(pinger::run_pinger(
-                    game_clone,
-                    messages,
-                    client_clone,
-                    started,
-                    bot_clone,
-                ));
+        // --- update tracked games still alive, finalize gone ones ---
+        let mut to_remove: Vec<i64> = Vec::new();
+        for (&game_id, entries) in &mut tracked {
+            if let Some(current) = games.iter().find(|g| g.id == game_id) {
+                // game still alive → update message
+                let text = pinger::pinger_msg(current);
+                for entry in entries.iter_mut() {
+                    if let Err(e) = bot
+                        .edit_message_text(entry.chat_id, entry.message_id, text.clone())
+                        .await
+                    {
+                        log::warn!("poller: failed to edit msg in {}: {e}", entry.chat_id);
+                    }
+                    entry.game = current.clone();
+                }
+            } else {
+                // game gone → final message
+                let text = pinger::pinger_final_msg(&entries[0].game);
+                log::info!("poller: game {} gone, sending final message", game_id);
+                for entry in entries.iter() {
+                    if let Err(e) = bot
+                        .edit_message_text(entry.chat_id, entry.message_id, text.clone())
+                        .await
+                    {
+                        log::warn!("poller: failed to edit final msg in {}: {e}", entry.chat_id);
+                    }
+                }
+                to_remove.push(game_id);
             }
+        }
+        for id in to_remove {
+            tracked.remove(&id);
         }
 
         // Keep the set bounded.

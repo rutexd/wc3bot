@@ -18,6 +18,8 @@ pub struct Game {
     pub slots_taken: i32,
     #[serde(default)]
     pub slots_total: i32,
+    #[serde(default)]
+    pub created: i64,
 }
 
 impl Game {

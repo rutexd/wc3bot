@@ -26,6 +26,15 @@ mod tests {
     }
 
     #[test]
+    fn custom_castle_matches() {
+        assert!(matches("custom castle", "Custom Castle"));
+        assert!(matches("Custom Castle", "custom castle"));
+        assert!(matches("Custom Castle", "Custom Castle"));
+        assert!(matches("Custom Castle", "Custom_Castle"));
+        assert!(matches("Custom Castle", "custom_castle"));
+    }
+
+    #[test]
     fn map_and_host_names() {
         assert!(matches("pudge", "(10) Pudge Wars v2.03d.w3x"));
         assert!(matches("legion td", "Legion_TD_11.4b_Team_OZE.w3x"));
