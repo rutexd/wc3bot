@@ -6,6 +6,15 @@ pub const KIND_MAP: &str = "map";
 pub const KIND_HOST: &str = "host";
 pub const KIND_NAME: &str = "name";
 
+pub const SNOOZE_SECS: i64 = 12 * 60 * 60;
+
+fn now_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 #[derive(Debug, Clone)]
 pub struct Sub {
     pub id: i64,
@@ -49,6 +58,8 @@ impl Db {
             "ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'",
             [],
         );
+        // Migration for the 12-hour snooze feature.
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN snooze_until INTEGER", []);
         Ok(Db(Mutex::new(conn)))
     }
 
@@ -77,8 +88,40 @@ impl Db {
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
             "INSERT INTO users(chat_id, notifications_enabled) VALUES (?1, ?2)
-             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = ?2",
+             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = ?2, snooze_until = NULL",
             params![chat_id, on as i64],
+        );
+    }
+
+    /// Permanently off (manual re-enable needed).
+    pub fn mute(&self, chat_id: i64) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO users(chat_id, notifications_enabled) VALUES (?1, 0)
+             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = 0, snooze_until = NULL",
+            params![chat_id],
+        );
+    }
+
+    /// Off for SNOOZE_SECS, then auto re-enabled.
+    pub fn snooze(&self, chat_id: i64) {
+        let until = now_ts() + SNOOZE_SECS;
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO users(chat_id, notifications_enabled, snooze_until) VALUES (?1, 0, ?2)
+             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = 0, snooze_until = ?2",
+            params![chat_id, until],
+        );
+    }
+
+    /// Re-enable notifications for users whose snooze expired.
+    pub fn release_expired_snoozes(&self) {
+        let now = now_ts();
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE users SET notifications_enabled = 1, snooze_until = NULL
+             WHERE snooze_until IS NOT NULL AND snooze_until <= ?1",
+            params![now],
         );
     }
 

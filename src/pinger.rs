@@ -2,6 +2,16 @@ use std::time::Duration;
 
 use crate::api::Game;
 use crate::loc::{tr, Lang};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
+pub fn notification_kb(lang: Lang) -> InlineKeyboardMarkup {
+    let t = tr(lang);
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback(t.btn_snooze.to_string(), "snooze".to_string()),
+        InlineKeyboardButton::callback(t.btn_mute.to_string(), "mute".to_string()),
+        InlineKeyboardButton::callback(t.btn_check.to_string(), "check".to_string()),
+    ]])
+}
 
 fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();

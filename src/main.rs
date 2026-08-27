@@ -124,18 +124,21 @@ async fn run_async() -> Result<()> {
     log::info!("бот @{} запущен", me.username());
 
     let database = std::sync::Arc::new(db::Db::open("wc3bot.db")?);
+    let deleted: std::sync::Arc<std::sync::Mutex<HashSet<(i64, i32)>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
 
     {
         let bot = bot.clone();
         let database = database.clone();
+        let deleted = deleted.clone();
         tokio::spawn(async move {
-            if let Err(e) = poller(bot, database).await {
+            if let Err(e) = poller(bot, database, deleted).await {
                 log::error!("poller остановлен: {e:#}");
             }
         });
     }
 
-    let state = handlers::AppState::new(database, me.id);
+    let state = handlers::AppState::new(database, me.id, deleted);
     let handler = teloxide::dptree::entry()
         .branch(Update::filter_message().endpoint(handlers::handle_message))
         .branch(Update::filter_callback_query().endpoint(handlers::handle_callback));
@@ -156,7 +159,11 @@ struct TrackedGame {
     lang: loc::Lang,
 }
 
-async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<()> {
+async fn poller(
+    bot: teloxide::Bot,
+    database: std::sync::Arc<db::Db>,
+    deleted: std::sync::Arc<std::sync::Mutex<HashSet<(i64, i32)>>>,
+) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent("wc3bot/0.1")
@@ -183,6 +190,7 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
 
     loop {
         tokio::time::sleep(interval).await;
+        database.release_expired_snoozes();
         let games = match api::fetch_gamelist(&client).await {
             Ok(g) => g,
             Err(e) => {
@@ -207,6 +215,7 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                     let lang = database.lang(active.chat_id);
                     match bot
                         .send_message(ChatId(active.chat_id), game.notification_text(lang))
+                        .reply_markup(pinger::notification_kb(lang))
                         .await
                     {
                         Ok(m) => {
@@ -228,6 +237,21 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
             }
         }
 
+        // --- drop messages the user checked/deleted ---
+        {
+            let deleted = deleted.lock().unwrap();
+            let mut empty: Vec<i64> = Vec::new();
+            for (gid, entries) in tracked.iter_mut() {
+                entries.retain(|e| !deleted.contains(&(e.chat_id.0, e.message_id.0)));
+                if entries.is_empty() {
+                    empty.push(*gid);
+                }
+            }
+            for gid in empty {
+                tracked.remove(&gid);
+            }
+        }
+
         // --- update tracked games still alive, finalize gone ones ---
         let mut to_remove: Vec<i64> = Vec::new();
         for (&game_id, entries) in &mut tracked {
@@ -237,6 +261,7 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                     let text = pinger::pinger_msg(current, entry.lang);
                     if let Err(e) = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
+                        .reply_markup(pinger::notification_kb(entry.lang))
                         .await
                     {
                         log::warn!("poller: failed to edit msg in {}: {e}", entry.chat_id);
@@ -244,17 +269,15 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                     entry.game = current.clone();
                 }
             } else {
-                // game gone → final message
+                // game gone → final message (drop keyboard)
                 let wait = pinger::game_age(entries[0].game.created);
                 log::info!("poller: game {} gone, sending final message", game_id);
                 for entry in entries.iter() {
                     let text = pinger::pinger_final_msg(&entry.game, wait, entry.lang);
-                    if let Err(e) = bot
+                    let _ = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
-                        .await
-                    {
-                        log::warn!("poller: failed to edit final msg in {}: {e}", entry.chat_id);
-                    }
+                        .reply_markup(teloxide::types::InlineKeyboardMarkup::default())
+                        .await;
                 }
                 to_remove.push(game_id);
             }

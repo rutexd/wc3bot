@@ -99,6 +99,12 @@ pub struct T {
     pub ping_started: &'static str, // {time}
     pub dash: &'static str,         // empty name placeholder
     pub msg_add_all_done: &'static str, // {name} {list}
+    // Notification keyboard
+    pub btn_snooze: &'static str,
+    pub btn_mute: &'static str,
+    pub btn_check: &'static str,
+    pub msg_snoozed: &'static str,
+    pub msg_muted: &'static str,
 }
 
 const EN: T = T {
@@ -168,6 +174,11 @@ const EN: T = T {
     ping_started: "✅ Started: after {time}",
     dash: "—",
     msg_add_all_done: "✅ {name} — {list}\n\n{more}",
+    btn_snooze: "😴 12h",
+    btn_mute: "🔕 Off",
+    btn_check: "✅",
+    msg_snoozed: "🔕 Notifications off for 12 hours",
+    msg_muted: "🔕 Notifications turned off",
 };
 
 const RU: T = T {
@@ -238,6 +249,11 @@ const RU: T = T {
     ping_started: "✅ Началось: спустя {time}",
     dash: "—",
     msg_add_all_done: "✅ {name} — {list}\n\n{more}",
+    btn_snooze: "😴 12ч",
+    btn_mute: "🔕 Выкл",
+    btn_check: "✅",
+    msg_snoozed: "🔕 Уведомления выключены на 12 часов",
+    msg_muted: "🔕 Уведомления выключены",
 };
 
 pub fn tr(lang: Lang) -> &'static T {

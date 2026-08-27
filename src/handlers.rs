@@ -26,14 +26,20 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub pending: Arc<Mutex<HashMap<i64, Pending>>>,
     pub bot_id: UserId,
+    pub deleted: Arc<Mutex<std::collections::HashSet<(i64, i32)>>>,
 }
 
 impl AppState {
-    pub fn new(db: Arc<Db>, bot_id: UserId) -> Self {
+    pub fn new(
+        db: Arc<Db>,
+        bot_id: UserId,
+        deleted: Arc<Mutex<std::collections::HashSet<(i64, i32)>>>,
+    ) -> Self {
         Self {
             db,
             pending: Arc::new(Mutex::new(HashMap::new())),
             bot_id,
+            deleted,
         }
     }
 
@@ -491,7 +497,7 @@ pub fn handle_callback(
             _ => {
                 let lang = state.db.lang(uid);
                 let t = tr(lang);
-                route_callback(bot, state, data, uid, chat_id, mid, t).await?;
+                route_callback(bot, state, data, uid, chat_id, mid, t, cq.id).await?;
             }
         }
         Ok(())
@@ -506,6 +512,7 @@ async fn route_callback(
     chat_id: ChatId,
     mid: Option<MessageId>,
     t: &'static T,
+    cq_id: String,
 ) -> ResponseResult<()> {
     match data {
         "menu" => {
@@ -577,6 +584,28 @@ async fn route_callback(
                 maps_kb(&subs, t),
             )
             .await?;
+        }
+        "snooze" => {
+            state.db.snooze(uid);
+            let _ = bot
+                .answer_callback_query(cq_id)
+                .text(t.msg_snoozed)
+                .show_alert(false)
+                .await;
+        }
+        "mute" => {
+            state.db.mute(uid);
+            let _ = bot
+                .answer_callback_query(cq_id)
+                .text(t.msg_muted)
+                .show_alert(false)
+                .await;
+        }
+        "check" => {
+            if let Some(mid) = mid {
+                let _ = bot.delete_message(chat_id, mid).await;
+                state.deleted.lock().unwrap().insert((chat_id.0, mid.0));
+            }
         }
         d => {
             let mut parts = d.splitn(2, ':');
