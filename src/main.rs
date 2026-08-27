@@ -153,6 +153,7 @@ struct TrackedGame {
     chat_id: ChatId,
     message_id: teloxide::types::MessageId,
     game: api::Game,
+    lang: loc::Lang,
 }
 
 async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<()> {
@@ -203,6 +204,7 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                     _ => norm::matches(&active.sub.pattern, &game.map),
                 };
                 if matched {
+                    let lang = database.lang(active.chat_id);
                     match bot
                         .send_message(ChatId(active.chat_id), game.notification_text())
                         .await
@@ -212,6 +214,7 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                                 chat_id: ChatId(active.chat_id),
                                 message_id: m.id,
                                 game: game.clone(),
+                                lang,
                             });
                         }
                         Err(e) => {
@@ -230,8 +233,8 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
         for (&game_id, entries) in &mut tracked {
             if let Some(current) = games.iter().find(|g| g.id == game_id) {
                 // game still alive → update message
-                let text = pinger::pinger_msg(current);
                 for entry in entries.iter_mut() {
+                    let text = pinger::pinger_msg(current, entry.lang);
                     if let Err(e) = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
                         .await
@@ -243,9 +246,9 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
             } else {
                 // game gone → final message
                 let wait = pinger::game_age(entries[0].game.created);
-                let text = pinger::pinger_final_msg(&entries[0].game, wait);
                 log::info!("poller: game {} gone, sending final message", game_id);
                 for entry in entries.iter() {
+                    let text = pinger::pinger_final_msg(&entry.game, wait, entry.lang);
                     if let Err(e) = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
                         .await

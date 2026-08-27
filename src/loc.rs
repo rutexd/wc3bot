@@ -90,6 +90,15 @@ pub struct T {
     pub msg_use_menu: &'static str,
     pub msg_stop: &'static str,
     pub msg_add_more: &'static str,
+    // Pinger
+    pub ping_map: &'static str,     // {map}
+    pub ping_host: &'static str,    // {host}
+    pub ping_name: &'static str,    // {name}
+    pub ping_slots: &'static str,   // {taken} {total}
+    pub ping_server: &'static str,  // {server}
+    pub ping_id: &'static str,      // {id}
+    pub ping_created: &'static str, // {time}
+    pub ping_started: &'static str, // {time}
 }
 
 const EN: T = T {
@@ -151,6 +160,14 @@ const EN: T = T {
     msg_use_menu: "🤔 Use the menu buttons or /start.",
     msg_stop: "👋 All your data has been deleted. /start to start over.",
     msg_add_more: "Send another name or press Done to finish.",
+    ping_map: "🗺️ Map: {map}",
+    ping_host: "🏠 Host: {host}",
+    ping_name: "📛 Name: {name}",
+    ping_slots: "👥 Players: {taken}/{total}",
+    ping_server: "🌍 Server: {server}",
+    ping_id: "🆔 ID: {id}",
+    ping_created: "⏱ Created: {time} ago",
+    ping_started: "✅ Started: after {time}",
 };
 
 const RU: T = T {
@@ -213,6 +230,14 @@ const RU: T = T {
     msg_use_menu: "🤔 Используй кнопки меню или /start.",
     msg_stop: "👋 Все твои данные удалены. /start — начать заново.",
     msg_add_more: "Отправь ещё одно название или нажми Готово.",
+    ping_map: "🗺️ Карта: {map}",
+    ping_host: "🏠 Хост: {host}",
+    ping_name: "📛 Название: {name}",
+    ping_slots: "👥 Игроки: {taken}/{total}",
+    ping_server: "🌍 Сервер: {server}",
+    ping_id: "🆔 ID: {id}",
+    ping_created: "⏱ Создано: {time} назад",
+    ping_started: "✅ Началось: спустя {time}",
 };
 
 pub fn tr(lang: Lang) -> &'static T {
