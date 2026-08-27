@@ -10,13 +10,6 @@ pub struct PingerMsg {
     pub message_id: MessageId,
 }
 
-pub struct GamePinger {
-    pub bot: teloxide::Bot,
-    pub messages: Vec<PingerMsg>,
-    pub game: Game,
-    pub started: Instant,
-}
-
 pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();
     let m = secs / 60;

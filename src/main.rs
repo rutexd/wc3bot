@@ -6,11 +6,7 @@ mod norm;
 mod pinger;
 
 use anyhow::{bail, Context, Result};
-use std::{
-    collections::{HashMap, HashSet},
-    env,
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, env, time::{Duration, Instant}};
 use teloxide::{prelude::*, types::ChatId};
 
 fn sanitize_name(name: &str) -> String {
@@ -171,8 +167,6 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
         .collect();
     log::info!("poller: инициализировано {} известных игр", seen.len());
 
-    let mut pinger_map: HashMap<i64, pinger::GamePinger> = HashMap::new();
-
     loop {
         tokio::time::sleep(interval).await;
         let games = match api::fetch_gamelist(&client).await {
@@ -221,15 +215,6 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                 let bot_clone = bot.clone();
                 let client_clone = client.clone();
                 let started = Instant::now();
-                pinger_map.insert(
-                    game.id,
-                    pinger::GamePinger {
-                        bot: bot_clone.clone(),
-                        messages: messages.clone(),
-                        game: game_clone.clone(),
-                        started,
-                    },
-                );
                 tokio::spawn(pinger::run_pinger(
                     game_clone,
                     messages,
@@ -237,16 +222,6 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                     started,
                     bot_clone,
                 ));
-            }
-        }
-
-        // Update pinger entries for games still in the list
-        let game_ids: Vec<i64> = games.iter().map(|g| g.id).collect();
-        for id in &game_ids {
-            if let Some(p) = pinger_map.get_mut(id) {
-                if let Some(g) = games.iter().find(|g| g.id == *id) {
-                    p.game = g.clone();
-                }
             }
         }
 
