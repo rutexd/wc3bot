@@ -3,9 +3,14 @@ mod db;
 mod handlers;
 mod loc;
 mod norm;
+mod pinger;
 
 use anyhow::{bail, Context, Result};
-use std::{collections::HashSet, env, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    time::{Duration, Instant},
+};
 use teloxide::{prelude::*, types::ChatId};
 
 fn sanitize_name(name: &str) -> String {
@@ -166,6 +171,8 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
         .collect();
     log::info!("poller: инициализировано {} известных игр", seen.len());
 
+    let mut pinger_map: HashMap<i64, pinger::GamePinger> = HashMap::new();
+
     loop {
         tokio::time::sleep(interval).await;
         let games = match api::fetch_gamelist(&client).await {
@@ -176,11 +183,12 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
             }
         };
 
-        for game in games {
+        for game in &games {
             if !seen.insert(game.id) {
                 continue;
             }
-            let text = game.notification_text();
+
+            let mut messages: Vec<pinger::PingerMsg> = Vec::new();
             for active in database.all_active_subs() {
                 let matched = match active.sub.kind.as_str() {
                     db::KIND_HOST => norm::matches(&active.sub.pattern, &game.host),
@@ -188,12 +196,56 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                     _ => norm::matches(&active.sub.pattern, &game.map),
                 };
                 if matched {
-                    if let Err(e) = bot.send_message(ChatId(active.chat_id), text.clone()).await {
-                        log::warn!(
-                            "poller: не удалось отправить уведомление в {}: {e}",
-                            active.chat_id
-                        );
+                    match bot
+                        .send_message(ChatId(active.chat_id), game.notification_text())
+                        .await
+                    {
+                        Ok(m) => {
+                            messages.push(pinger::PingerMsg {
+                                chat_id: ChatId(active.chat_id),
+                                message_id: m.id,
+                            });
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "poller: не удалось отправить уведомление в {}: {e}",
+                                active.chat_id
+                            );
+                        }
                     }
+                }
+            }
+
+            if !messages.is_empty() {
+                let game_clone = game.clone();
+                let bot_clone = bot.clone();
+                let client_clone = client.clone();
+                let started = Instant::now();
+                pinger_map.insert(
+                    game.id,
+                    pinger::GamePinger {
+                        bot: bot_clone.clone(),
+                        messages: messages.clone(),
+                        game: game_clone.clone(),
+                        started,
+                    },
+                );
+                tokio::spawn(pinger::run_pinger(
+                    game_clone,
+                    messages,
+                    client_clone,
+                    started,
+                    bot_clone,
+                ));
+            }
+        }
+
+        // Update pinger entries for games still in the list
+        let game_ids: Vec<i64> = games.iter().map(|g| g.id).collect();
+        for id in &game_ids {
+            if let Some(p) = pinger_map.get_mut(id) {
+                if let Some(g) = games.iter().find(|g| g.id == *id) {
+                    p.game = g.clone();
                 }
             }
         }
