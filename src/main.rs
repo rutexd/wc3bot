@@ -206,7 +206,7 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                 if matched {
                     let lang = database.lang(active.chat_id);
                     match bot
-                        .send_message(ChatId(active.chat_id), game.notification_text())
+                        .send_message(ChatId(active.chat_id), game.notification_text(lang))
                         .await
                     {
                         Ok(m) => {

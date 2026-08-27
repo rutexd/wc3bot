@@ -162,9 +162,8 @@ fn sub_view(s: &db::Sub, t: &'static T) -> (String, InlineKeyboardMarkup) {
         _ => t.sub_desc_map,
     };
     let text = format!(
-        "{} #{}\n\n{}: {}\n{}: {}\n{}: {}\n\n{}",
+        "{}\n\n{}: {}\n{}: {}\n{}: {}\n\n{}",
         t.sub_id.replace("{id}", &s.id.to_string()),
-        "",
         t.sub_name,
         s.pattern,
         t.sub_type,
@@ -448,7 +447,10 @@ async fn add_all_flow(
         format!("{}\n\n{}", t.msg_duplicate, t.msg_add_more)
     } else {
         let list = added.join(", ");
-        format!("✅ {} — {}\n\n{}", name, list, t.msg_add_more)
+        t.msg_add_all_done
+            .replace("{name}", &name)
+            .replace("{list}", &list)
+            .replace("{more}", t.msg_add_more)
     };
     state.set_pending(uid, Pending::AddAll);
     let _ = show(bot, chat_id, None, text, done_kb(t)).await;

@@ -22,26 +22,18 @@ pub struct Game {
     pub created: i64,
 }
 
-impl Game {
-    pub fn server_display(&self) -> String {
-        self.server.to_uppercase()
-    }
+use crate::loc::{tr, Lang};
 
-    pub fn notification_text(&self) -> String {
+impl Game {
+    pub fn notification_text(&self, lang: Lang) -> String {
+        let t = tr(lang);
+        let name = if self.name.trim().is_empty() { t.dash } else { &self.name };
         format!(
-            "🗺️ Карта: {}\n\
-             🏠 Хост: {}\n\
-             📛 Название: {}\n\
-             👥 Игроки: {}/{}\n\
-             🌍 Сервер: {}\n\
-             🆔 ID: {}",
-            self.map,
-            self.host,
-            if self.name.trim().is_empty() { "—" } else { &self.name },
-            self.slots_taken,
-            self.slots_total,
-            self.server_display(),
-            self.id
+            "{map}\n{name}\n{host}\n{slots}",
+            map = t.ping_map.replace("{map}", &self.map),
+            name = t.ping_name.replace("{name}", name).replace("{server}", &self.server.to_uppercase()),
+            host = t.ping_host.replace("{host}", &self.host),
+            slots = t.ping_slots.replace("{taken}", &self.slots_taken.to_string()).replace("{total}", &self.slots_total.to_string()),
         )
     }
 }

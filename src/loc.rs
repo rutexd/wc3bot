@@ -92,13 +92,13 @@ pub struct T {
     pub msg_add_more: &'static str,
     // Pinger
     pub ping_map: &'static str,     // {map}
+    pub ping_name: &'static str,    // {name} {server}
     pub ping_host: &'static str,    // {host}
-    pub ping_name: &'static str,    // {name}
     pub ping_slots: &'static str,   // {taken} {total}
-    pub ping_server: &'static str,  // {server}
-    pub ping_id: &'static str,      // {id}
     pub ping_created: &'static str, // {time}
     pub ping_started: &'static str, // {time}
+    pub dash: &'static str,         // empty name placeholder
+    pub msg_add_all_done: &'static str, // {name} {list}
 }
 
 const EN: T = T {
@@ -161,13 +161,13 @@ const EN: T = T {
     msg_stop: "👋 All your data has been deleted. /start to start over.",
     msg_add_more: "Send another name or press Done to finish.",
     ping_map: "🗺️ Map: {map}",
+    ping_name: "📛 Name: {name} ({server})",
     ping_host: "🏠 Host: {host}",
-    ping_name: "📛 Name: {name}",
     ping_slots: "👥 Players: {taken}/{total}",
-    ping_server: "🌍 Server: {server}",
-    ping_id: "🆔 ID: {id}",
     ping_created: "⏱ Created: {time} ago",
     ping_started: "✅ Started: after {time}",
+    dash: "—",
+    msg_add_all_done: "✅ {name} — {list}\n\n{more}",
 };
 
 const RU: T = T {
@@ -231,13 +231,13 @@ const RU: T = T {
     msg_stop: "👋 Все твои данные удалены. /start — начать заново.",
     msg_add_more: "Отправь ещё одно название или нажми Готово.",
     ping_map: "🗺️ Карта: {map}",
+    ping_name: "📛 Название: {name} ({server})",
     ping_host: "🏠 Хост: {host}",
-    ping_name: "📛 Название: {name}",
     ping_slots: "👥 Игроки: {taken}/{total}",
-    ping_server: "🌍 Сервер: {server}",
-    ping_id: "🆔 ID: {id}",
     ping_created: "⏱ Создано: {time} назад",
     ping_started: "✅ Началось: спустя {time}",
+    dash: "—",
+    msg_add_all_done: "✅ {name} — {list}\n\n{more}",
 };
 
 pub fn tr(lang: Lang) -> &'static T {
