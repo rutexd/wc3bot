@@ -41,22 +41,23 @@ pub fn pinger_msg(game: &Game) -> String {
     )
 }
 
-pub fn pinger_final_msg(game: &Game) -> String {
-    let age = format_duration(game_age(game.created));
+pub fn pinger_final_msg(game: &Game, wait: Duration) -> String {
     format!(
         "🗺️ Карта: {}\n\
          🏠 Хост: {}\n\
          📛 Название: {}\n\
+         👥 Игроки: {}/{}\n\
          🌍 Сервер: {}\n\
          🆔 ID: {}\n\
          \n\
-         🕐 Началось: {} назад\n\
-         ✅ Игра началась",
+         ✅ Началось: спустя {}",
         game.map,
         game.host,
         if game.name.trim().is_empty() { "—" } else { &game.name },
+        game.slots_taken,
+        game.slots_total,
         game.server.to_uppercase(),
         game.id,
-        age,
+        format_duration(wait),
     )
 }

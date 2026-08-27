@@ -242,7 +242,8 @@ async fn poller(bot: teloxide::Bot, database: std::sync::Arc<db::Db>) -> Result<
                 }
             } else {
                 // game gone → final message
-                let text = pinger::pinger_final_msg(&entries[0].game);
+                let wait = pinger::game_age(entries[0].game.created);
+                let text = pinger::pinger_final_msg(&entries[0].game, wait);
                 log::info!("poller: game {} gone, sending final message", game_id);
                 for entry in entries.iter() {
                     if let Err(e) = bot
