@@ -190,7 +190,7 @@ async fn poller(
 
     loop {
         tokio::time::sleep(interval).await;
-        database.release_expired_snoozes();
+        database.release_expired_map_snoozes();
         let games = match api::fetch_gamelist(&client).await {
             Ok(g) => g,
             Err(e) => {
@@ -212,10 +212,13 @@ async fn poller(
                     _ => norm::matches(&active.sub.pattern, &game.map),
                 };
                 if matched {
+                    if database.is_map_muted(active.chat_id, &game.map) {
+                        continue;
+                    }
                     let lang = database.lang(active.chat_id);
                     match bot
                         .send_message(ChatId(active.chat_id), game.notification_text(lang))
-                        .reply_markup(pinger::notification_kb(lang))
+                        .reply_markup(pinger::notification_kb(lang, &game.map))
                         .await
                     {
                         Ok(m) => {
@@ -261,7 +264,7 @@ async fn poller(
                     let text = pinger::pinger_msg(current, entry.lang);
                     if let Err(e) = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
-                        .reply_markup(pinger::notification_kb(entry.lang))
+                        .reply_markup(pinger::notification_kb(entry.lang, &current.map))
                         .await
                     {
                         log::warn!("poller: failed to edit msg in {}: {e}", entry.chat_id);
@@ -269,14 +272,14 @@ async fn poller(
                     entry.game = current.clone();
                 }
             } else {
-                // game gone → final message (drop keyboard)
+                // game gone → final message
                 let wait = pinger::game_age(entries[0].game.created);
                 log::info!("poller: game {} gone, sending final message", game_id);
                 for entry in entries.iter() {
                     let text = pinger::pinger_final_msg(&entry.game, wait, entry.lang);
                     let _ = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
-                        .reply_markup(teloxide::types::InlineKeyboardMarkup::default())
+                        .reply_markup(pinger::notification_kb(entry.lang, &entry.game.map))
                         .await;
                 }
                 to_remove.push(game_id);

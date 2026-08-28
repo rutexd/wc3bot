@@ -8,11 +8,18 @@ pub const KIND_NAME: &str = "name";
 
 pub const SNOOZE_SECS: i64 = 12 * 60 * 60;
 
-fn now_ts() -> i64 {
+pub fn now_ts() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// A per-map notification suppression. `until == None` means forever.
+#[derive(Debug, Clone)]
+pub struct MapMute {
+    pub map: String,
+    pub until: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,15 +58,19 @@ impl Db {
                 enabled INTEGER NOT NULL DEFAULT 1,
                 UNIQUE (chat_id, kind, pattern)
              );
-             CREATE INDEX IF NOT EXISTS idx_subs_chat ON subs(chat_id);",
+             CREATE INDEX IF NOT EXISTS idx_subs_chat ON subs(chat_id);
+             CREATE TABLE IF NOT EXISTS map_mutes (
+                chat_id INTEGER NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
+                map TEXT NOT NULL,
+                until INTEGER,
+                PRIMARY KEY (chat_id, map)
+             );",
         )?;
         // Migration for DBs created before the language setting existed.
         let _ = conn.execute(
             "ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'",
             [],
         );
-        // Migration for the 12-hour snooze feature.
-        let _ = conn.execute("ALTER TABLE users ADD COLUMN snooze_until INTEGER", []);
         Ok(Db(Mutex::new(conn)))
     }
 
@@ -88,41 +99,70 @@ impl Db {
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
             "INSERT INTO users(chat_id, notifications_enabled) VALUES (?1, ?2)
-             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = ?2, snooze_until = NULL",
+             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = ?2",
             params![chat_id, on as i64],
         );
     }
 
-    /// Permanently off (manual re-enable needed).
-    pub fn mute(&self, chat_id: i64) {
-        let conn = self.0.lock().unwrap();
-        let _ = conn.execute(
-            "INSERT INTO users(chat_id, notifications_enabled) VALUES (?1, 0)
-             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = 0, snooze_until = NULL",
-            params![chat_id],
-        );
-    }
-
-    /// Off for SNOOZE_SECS, then auto re-enabled.
-    pub fn snooze(&self, chat_id: i64) {
+    /// Suppress notifications for `map` for SNOOZE_SECS, then auto re-enabled.
+    pub fn snooze_map(&self, chat_id: i64, map: &str) {
         let until = now_ts() + SNOOZE_SECS;
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
-            "INSERT INTO users(chat_id, notifications_enabled, snooze_until) VALUES (?1, 0, ?2)
-             ON CONFLICT(chat_id) DO UPDATE SET notifications_enabled = 0, snooze_until = ?2",
-            params![chat_id, until],
+            "INSERT INTO map_mutes(chat_id, map, until) VALUES (?1, ?2, ?3)
+             ON CONFLICT(chat_id, map) DO UPDATE SET until = ?3",
+            params![chat_id, map, until],
         );
     }
 
-    /// Re-enable notifications for users whose snooze expired.
-    pub fn release_expired_snoozes(&self) {
+    /// Suppress notifications for `map` forever (manual re-enable needed).
+    pub fn mute_map(&self, chat_id: i64, map: &str) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO map_mutes(chat_id, map, until) VALUES (?1, ?2, NULL)
+             ON CONFLICT(chat_id, map) DO UPDATE SET until = NULL",
+            params![chat_id, map],
+        );
+    }
+
+    /// Re-enable suppressed maps for users whose snooze expired.
+    pub fn release_expired_map_snoozes(&self) {
         let now = now_ts();
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
-            "UPDATE users SET notifications_enabled = 1, snooze_until = NULL
-             WHERE snooze_until IS NOT NULL AND snooze_until <= ?1",
+            "DELETE FROM map_mutes WHERE until IS NOT NULL AND until <= ?1",
             params![now],
         );
+    }
+
+    pub fn is_map_muted(&self, chat_id: i64, map: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT 1 FROM map_mutes WHERE chat_id = ?1 AND map = ?2",
+                params![chat_id, map],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
+    pub fn list_map_mutes(&self, chat_id: i64) -> Vec<MapMute> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = match conn.prepare_cached(
+            "SELECT map, until FROM map_mutes WHERE chat_id = ?1 ORDER BY map",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![chat_id], |row| {
+            Ok(MapMute {
+                map: row.get(0)?,
+                until: row.get(1)?,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
     }
 
     /// Returns Err(true) if duplicate.

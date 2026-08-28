@@ -113,6 +113,27 @@ fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
             }
         }
     }
+
+    // suppressed (per-map) section
+    let mutes = db.list_map_mutes(uid);
+    text.push_str(&format!("\n\n{}:", t.st_muted_hdr));
+    if mutes.is_empty() {
+        text.push_str(&format!("\n{}", t.st_muted_empty));
+    } else {
+        let now = crate::db::now_ts();
+        for m in mutes {
+            let dur = match m.until {
+                None => t.st_forever.to_string(),
+                Some(until) => {
+                    let secs = (until - now).max(0);
+                    let h = secs / 3600;
+                    let min = (secs % 3600) / 60;
+                    format!("{h}{} {min}{} {}", t.st_h, t.st_m, t.st_remaining)
+                }
+            };
+            text.push_str(&format!("\n• {} — {}", m.map, dur));
+        }
+    }
     text
 }
 
@@ -585,22 +606,6 @@ async fn route_callback(
             )
             .await?;
         }
-        "snooze" => {
-            state.db.snooze(uid);
-            let _ = bot
-                .answer_callback_query(cq_id)
-                .text(t.msg_snoozed)
-                .show_alert(false)
-                .await;
-        }
-        "mute" => {
-            state.db.mute(uid);
-            let _ = bot
-                .answer_callback_query(cq_id)
-                .text(t.msg_muted)
-                .show_alert(false)
-                .await;
-        }
         "check" => {
             if let Some(mid) = mid {
                 let _ = bot.delete_message(chat_id, mid).await;
@@ -610,48 +615,80 @@ async fn route_callback(
         d => {
             let mut parts = d.splitn(2, ':');
             let op = parts.next().unwrap_or("");
-            let Some(id) = parts.next().and_then(|v| v.parse::<i64>().ok()) else {
-                return Ok(());
-            };
             match op {
-                "map" => {
-                    if let Some(s) = owned_sub(&state, id, uid) {
-                        let (text, kb) = sub_view(&s, t);
-                        show(bot, chat_id, mid, text, kb).await?;
+                "snooze" => {
+                    if let Some(map) = parts.next() {
+                        state.db.snooze_map(uid, map);
+                        let _ = bot
+                            .answer_callback_query(cq_id)
+                            .text(t.msg_snoozed)
+                            .show_alert(false)
+                            .await;
+                        if let Some(mid) = mid {
+                            let _ = bot.delete_message(chat_id, mid).await;
+                            state.deleted.lock().unwrap().insert((chat_id.0, mid.0));
+                        }
                     }
                 }
-                "toggle" => {
-                    if let Some(s) = owned_sub(&state, id, uid) {
-                        state.db.set_sub_enabled(id, !s.enabled);
-                        let s = state.db.get_sub(id).unwrap();
-                        let (text, kb) = sub_view(&s, t);
-                        show(bot, chat_id, mid, text, kb).await?;
+                "mute" => {
+                    if let Some(map) = parts.next() {
+                        state.db.mute_map(uid, map);
+                        let _ = bot
+                            .answer_callback_query(cq_id)
+                            .text(t.msg_muted)
+                            .show_alert(false)
+                            .await;
+                        if let Some(mid) = mid {
+                            let _ = bot.delete_message(chat_id, mid).await;
+                            state.deleted.lock().unwrap().insert((chat_id.0, mid.0));
+                        }
                     }
                 }
-                "rename" => {
-                    if let Some(s) = owned_sub(&state, id, uid) {
-                        state.set_pending(uid, Pending::Rename(id));
-                        bot.send_message(chat_id, t.prompt_rename.replace("{name}", &s.pattern))
-                            .reply_markup(cancel_kb(t))
-                            .await?;
+                _ => {
+                    let Some(id) = parts.next().and_then(|v| v.parse::<i64>().ok()) else {
+                        return Ok(());
+                    };
+                    match op {
+                        "map" => {
+                            if let Some(s) = owned_sub(&state, id, uid) {
+                                let (text, kb) = sub_view(&s, t);
+                                show(bot, chat_id, mid, text, kb).await?;
+                            }
+                        }
+                        "toggle" => {
+                            if let Some(s) = owned_sub(&state, id, uid) {
+                                state.db.set_sub_enabled(id, !s.enabled);
+                                let s = state.db.get_sub(id).unwrap();
+                                let (text, kb) = sub_view(&s, t);
+                                show(bot, chat_id, mid, text, kb).await?;
+                            }
+                        }
+                        "rename" => {
+                            if let Some(s) = owned_sub(&state, id, uid) {
+                                state.set_pending(uid, Pending::Rename(id));
+                                bot.send_message(chat_id, t.prompt_rename.replace("{name}", &s.pattern))
+                                    .reply_markup(cancel_kb(t))
+                                    .await?;
+                            }
+                        }
+                        "del" => {
+                            if let Some(s) = owned_sub(&state, id, uid) {
+                                println!("[del] uid={uid} id={id} name={}", s.pattern);
+                                state.db.delete_sub(id);
+                                let subs = state.db.list_subs(uid);
+                                show(
+                                    bot,
+                                    chat_id,
+                                    mid,
+                                    t.msg_deleted.replace("{name}", &s.pattern),
+                                    maps_kb(&subs, t),
+                                )
+                                .await?;
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                "del" => {
-                    if let Some(s) = owned_sub(&state, id, uid) {
-                        println!("[del] uid={uid} id={id} name={}", s.pattern);
-                        state.db.delete_sub(id);
-                        let subs = state.db.list_subs(uid);
-                        show(
-                            bot,
-                            chat_id,
-                            mid,
-                            t.msg_deleted.replace("{name}", &s.pattern),
-                            maps_kb(&subs, t),
-                        )
-                        .await?;
-                    }
-                }
-                _ => {}
             }
         }
     }
