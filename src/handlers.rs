@@ -61,19 +61,26 @@ fn btn(text: &str, data: &str) -> InlineKeyboardButton {
     InlineKeyboardButton::callback(text.to_string(), data.to_string())
 }
 
+/// 2x2 grid of add buttons used in every menu.
+fn add_buttons_kb(t: &'static T) -> Vec<Vec<InlineKeyboardButton>> {
+    vec![
+        vec![btn(t.btn_add_map, "addmap"), btn(t.btn_add_name, "addname")],
+        vec![btn(t.btn_add_host, "addhost"), btn(t.btn_add_all, "addall")],
+    ]
+}
+
 fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMarkup {
     let notif_label = if state.db.notifications_enabled(uid) {
         t.btn_notif_on
     } else {
         t.btn_notif_off
     };
-    InlineKeyboardMarkup::new(vec![
+    let mut rows = vec![
         vec![btn(t.btn_maps, "maps"), btn(t.btn_status, "status")],
-        vec![btn(t.btn_add_map, "addmap"), btn(t.btn_add_host, "addhost")],
-        vec![btn(t.btn_add_name, "addname")],
-        vec![btn(t.btn_add_all, "addall")],
-        vec![btn(notif_label, "notif"), btn(t.btn_lang, "lang")],
-    ])
+    ];
+    rows.extend(add_buttons_kb(t));
+    rows.push(vec![btn(notif_label, "notif"), btn(t.btn_lang, "lang")]);
+    InlineKeyboardMarkup::new(rows)
 }
 
 fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
@@ -170,14 +177,7 @@ fn maps_kb(subs: &[db::Sub], t: &'static T) -> InlineKeyboardMarkup {
             )]
         })
         .collect();
-    rows.push(vec![
-        btn(t.btn_add_map, "addmap"),
-        btn(t.btn_add_host, "addhost"),
-    ]);
-    rows.push(vec![
-        btn(t.btn_add_name, "addname"),
-        btn(t.btn_add_all, "addall"),
-    ]);
+    rows.extend(add_buttons_kb(t));
     rows.push(vec![btn(t.btn_main_menu, "menu")]);
     InlineKeyboardMarkup::new(rows)
 }
