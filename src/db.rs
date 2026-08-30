@@ -345,6 +345,27 @@ impl Db {
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default()
     }
+
+    /// Check if a game matches a subscription and should trigger a notification.
+    pub fn should_notify(&self, sub: &Sub, game_map: &str, game_host: &str, game_name: &str) -> bool {
+        let matched = match sub.kind.as_str() {
+            KIND_HOST => crate::norm::matches(&sub.pattern, game_host),
+            KIND_NAME => crate::norm::matches(&sub.pattern, game_name),
+            _ => crate::norm::matches(&sub.pattern, game_map),
+        };
+        if !matched {
+            return false;
+        }
+        if self.is_map_muted(sub.chat_id, game_map) {
+            return false;
+        }
+        if (sub.kind == KIND_MAP || sub.kind == KIND_NAME)
+            && !self.host_filter_passes(sub.id, game_host)
+        {
+            return false;
+        }
+        true
+    }
 }
 
 fn row_to_sub(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sub> {
@@ -1122,26 +1143,7 @@ mod tests {
     /// Simulates the poller matching logic for a single (game, subscription) pair.
     /// Returns true if the notification should be sent.
     fn should_notify(db: &Db, game: &crate::api::Game, sub: &Sub) -> bool {
-        // 1. match subscription pattern
-        let matched = match sub.kind.as_str() {
-            KIND_HOST => crate::norm::matches(&sub.pattern, &game.host),
-            KIND_NAME => crate::norm::matches(&sub.pattern, &game.name),
-            _ => crate::norm::matches(&sub.pattern, &game.map),
-        };
-        if !matched {
-            return false;
-        }
-        // 2. check map mute
-        if db.is_map_muted(sub.chat_id, &game.map) {
-            return false;
-        }
-        // 3. host filter (map/name only)
-        if (sub.kind == KIND_MAP || sub.kind == KIND_NAME)
-            && !db.host_filter_passes(sub.id, &game.host)
-        {
-            return false;
-        }
-        true
+        db.should_notify(sub, &game.map, &game.host, &game.name)
     }
 
     /// Returns the list of subscriptions that would trigger a notification for a given game.

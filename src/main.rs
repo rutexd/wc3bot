@@ -207,21 +207,7 @@ async fn poller(
             }
 
             for active in database.all_active_subs() {
-                let matched = match active.sub.kind.as_str() {
-                    db::KIND_HOST => norm::matches(&active.sub.pattern, &game.host),
-                    db::KIND_NAME => norm::matches(&active.sub.pattern, &game.name),
-                    _ => norm::matches(&active.sub.pattern, &game.map),
-                };
-                if matched {
-                    if database.is_map_muted(active.chat_id, &game.map) {
-                        continue;
-                    }
-                    // Host filter: applies to map and name subscriptions.
-                    if (active.sub.kind == db::KIND_MAP || active.sub.kind == db::KIND_NAME)
-                        && !database.host_filter_passes(active.sub.id, &game.host)
-                    {
-                        continue;
-                    }
+                if database.should_notify(&active.sub, &game.map, &game.host, &game.name) {
                     let lang = database.lang(active.chat_id);
                     match bot
                         .send_message(ChatId(active.chat_id), game.notification_text(lang))
