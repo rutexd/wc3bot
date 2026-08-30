@@ -260,14 +260,17 @@ fn host_filter_screen(
         }
     }
 
-    let kb = InlineKeyboardMarkup::new(vec![
-        vec![btn(t.btn_toggle_mode, &format!("hmode:{}", sub.id))],
-        vec![btn(t.btn_add_hf_host, &format!("hadd:{}", sub.id))],
-        vec![btn(
-            t.btn_to_list,
-            &format!("hback:{}", sub.id),
-        )],
-    ]);
+    let mut kb_rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    for h in hosts {
+        kb_rows.push(vec![
+            btn(h, &format!("hback:{}", sub.id)),
+            btn("🗑", &format!("hdel:{}:{}", sub.id, h)),
+        ]);
+    }
+    kb_rows.push(vec![btn(t.btn_toggle_mode, &format!("hmode:{}", sub.id))]);
+    kb_rows.push(vec![btn(t.btn_add_hf_host, &format!("hadd:{}", sub.id))]);
+    kb_rows.push(vec![btn(t.btn_to_list, &format!("hback:{}", sub.id))]);
+    let kb = InlineKeyboardMarkup::new(kb_rows);
     (text, kb)
 }
 
