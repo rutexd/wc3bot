@@ -141,7 +141,7 @@ fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
                     format!("{}{} {}{} {}", secs / 3600, t.st_h, (secs % 3600) / 60, t.st_m, t.st_remaining)
                 }
             };
-            text.push_str(&format!("\n• {} — {}", m.map, dur));
+            text.push_str(&format!("\n• {} {} — {}", kind_label(&m.kind, t), m.pattern, dur));
         }
     }
     text
@@ -668,25 +668,30 @@ async fn route_callback(
             }
         }
         d => {
-            // snooze / mute: "snooze:MapName" / "mute:MapName"
-            if let Some((op, map)) = d.split_once(':') {
+            // snooze / mute: "snooze:{kind}:{pattern}" / "mute:{kind}:{pattern}"
+            // kind is a fixed token (map|host|name); pattern is everything after it.
+            if let Some((op, rest)) = d.split_once(':') {
                 if op == "snooze" || op == "mute" {
-                    if op == "snooze" {
-                        state.db.snooze_map(uid, map);
-                    } else {
-                        state.db.mute_map(uid, map);
+                    if let Some((kind, pattern)) = rest.split_once(':') {
+                        if matches!(kind, db::KIND_MAP | db::KIND_HOST | db::KIND_NAME) {
+                            if op == "snooze" {
+                                state.db.snooze_sub(uid, kind, pattern);
+                            } else {
+                                state.db.mute_sub(uid, kind, pattern);
+                            }
+                            let msg = if op == "snooze" { t.msg_snoozed } else { t.msg_muted };
+                            let _ = bot
+                                .answer_callback_query(cq_id)
+                                .text(msg)
+                                .show_alert(false)
+                                .await;
+                            if let Some(mid) = mid {
+                                let _ = bot.delete_message(chat_id, mid).await;
+                                state.mark_deleted(chat_id.0, mid.0);
+                            }
+                            return Ok(());
+                        }
                     }
-                    let msg = if op == "snooze" { t.msg_snoozed } else { t.msg_muted };
-                    let _ = bot
-                        .answer_callback_query(cq_id)
-                        .text(msg)
-                        .show_alert(false)
-                        .await;
-                    if let Some(mid) = mid {
-                        let _ = bot.delete_message(chat_id, mid).await;
-                        state.mark_deleted(chat_id.0, mid.0);
-                    }
-                    return Ok(());
                 }
             }
 
@@ -753,9 +758,7 @@ async fn route_callback(
                 "del" => {
                     println!("[del] uid={uid} id={} name={}", cb.id, sub.pattern);
                     state.db.delete_sub(cb.id);
-                    if sub.kind == db::KIND_MAP {
-                        state.db.delete_map_mute(uid, &sub.pattern);
-                    }
+                    state.db.delete_map_mute(uid, &sub.kind, &sub.pattern);
                     let subs = state.db.list_subs(uid);
                     show(
                         bot,

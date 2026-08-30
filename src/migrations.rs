@@ -19,9 +19,10 @@ pub fn run(conn: &Connection) {
          CREATE INDEX IF NOT EXISTS idx_subs_chat ON subs(chat_id);
          CREATE TABLE IF NOT EXISTS map_mutes (
             chat_id INTEGER NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
-            map TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            pattern TEXT NOT NULL,
             until INTEGER,
-            PRIMARY KEY (chat_id, map)
+            PRIMARY KEY (chat_id, kind, pattern)
          );
          CREATE TABLE IF NOT EXISTS sub_hosts (
             sub_id INTEGER NOT NULL REFERENCES subs(id) ON DELETE CASCADE,
@@ -38,14 +39,28 @@ pub fn run(conn: &Connection) {
         [],
     );
 
-    // 002: clean orphaned map_mutes left behind when subscriptions were deleted
+    // 002: legacy schema cleanup. Old map_mutes was keyed by full game map string;
+    //      the new schema keys it by (kind, pattern). Drop the old table if present.
+    let legacy_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(map_mutes)")
+        .ok()
+        .map(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .map(|rows| rows.filter_map(Result::ok).collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    if legacy_columns.iter().any(|c| c == "map") {
+        let _ = conn.execute("DROP TABLE map_mutes", []);
+    }
     let _ = conn.execute(
-        "DELETE FROM map_mutes WHERE NOT EXISTS (
-            SELECT 1 FROM subs
-            WHERE subs.chat_id = map_mutes.chat_id
-              AND subs.kind = 'map'
-              AND subs.pattern = map_mutes.map
-        )",
+        "CREATE TABLE IF NOT EXISTS map_mutes (
+            chat_id INTEGER NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            until INTEGER,
+            PRIMARY KEY (chat_id, kind, pattern)
+         )",
         [],
     );
 

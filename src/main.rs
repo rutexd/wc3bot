@@ -158,6 +158,8 @@ struct TrackedGame {
     message_id: teloxide::types::MessageId,
     game: api::Game,
     lang: loc::Lang,
+    sub_kind: String,
+    sub_pattern: String,
 }
 
 async fn poller(
@@ -211,7 +213,11 @@ async fn poller(
                     let lang = database.lang(active.chat_id);
                     match bot
                         .send_message(ChatId(active.chat_id), game.notification_text(lang))
-                        .reply_markup(pinger::notification_kb(lang, &game.map))
+                        .reply_markup(pinger::notification_kb(
+                            lang,
+                            &active.sub.kind,
+                            &active.sub.pattern,
+                        ))
                         .await
                     {
                         Ok(m) => {
@@ -220,6 +226,8 @@ async fn poller(
                                 message_id: m.id,
                                 game: game.clone(),
                                 lang,
+                                sub_kind: active.sub.kind.clone(),
+                                sub_pattern: active.sub.pattern.clone(),
                             });
                         }
                         Err(e) => {
@@ -255,13 +263,17 @@ async fn poller(
                 // game still alive → update message
                 for entry in entries.iter_mut() {
                     let text = pinger::pinger_msg(current, entry.lang);
-                    if let Err(e) = bot
-                        .edit_message_text(entry.chat_id, entry.message_id, text.clone())
-                        .reply_markup(pinger::notification_kb(entry.lang, &current.map))
-                        .await
-                    {
-                        log::warn!("poller: failed to edit msg in {}: {e}", entry.chat_id);
-                    }
+if let Err(e) = bot
+                    .edit_message_text(entry.chat_id, entry.message_id, text.clone())
+                    .reply_markup(pinger::notification_kb(
+                        entry.lang,
+                        &entry.sub_kind,
+                        &entry.sub_pattern,
+                    ))
+                    .await
+                {
+                    log::warn!("poller: failed to edit msg in {}: {e}", entry.chat_id);
+                }
                     entry.game = current.clone();
                 }
             } else {
@@ -270,10 +282,14 @@ async fn poller(
                 log::info!("poller: game {} gone, sending final message", game_id);
                 for entry in entries.iter() {
                     let text = pinger::pinger_final_msg(&entry.game, wait, entry.lang);
-                    let _ = bot
-                        .edit_message_text(entry.chat_id, entry.message_id, text.clone())
-                        .reply_markup(pinger::notification_kb(entry.lang, &entry.game.map))
-                        .await;
+let _ = bot
+                    .edit_message_text(entry.chat_id, entry.message_id, text.clone())
+                    .reply_markup(pinger::notification_kb(
+                        entry.lang,
+                        &entry.sub_kind,
+                        &entry.sub_pattern,
+                    ))
+                    .await;
                 }
                 to_remove.push(game_id);
             }

@@ -4,14 +4,17 @@ use crate::api::Game;
 use crate::loc::{tr, Lang};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-pub fn notification_kb(lang: Lang, map: &str) -> InlineKeyboardMarkup {
+pub fn notification_kb(lang: Lang, kind: &str, pattern: &str) -> InlineKeyboardMarkup {
     let t = tr(lang);
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback(
             t.btn_snooze.to_string(),
-            format!("snooze:{map}"),
+            format!("snooze:{kind}:{pattern}"),
         ),
-        InlineKeyboardButton::callback(t.btn_mute.to_string(), format!("mute:{map}")),
+        InlineKeyboardButton::callback(
+            t.btn_mute.to_string(),
+            format!("mute:{kind}:{pattern}"),
+        ),
         InlineKeyboardButton::callback(t.btn_check.to_string(), "check".to_string()),
     ]])
 }

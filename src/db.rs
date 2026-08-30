@@ -19,10 +19,11 @@ pub fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
-/// A per-map notification suppression. `until == None` means forever.
+/// A per-subscription notification suppression. `until == None` means forever.
 #[derive(Debug, Clone)]
 pub struct MapMute {
-    pub map: String,
+    pub kind: String,
+    pub pattern: String,
     pub until: Option<i64>,
 }
 
@@ -84,28 +85,30 @@ impl Db {
         );
     }
 
-    /// Suppress notifications for `map` for SNOOZE_SECS, then auto re-enabled.
-    pub fn snooze_map(&self, chat_id: i64, map: &str) {
+    /// Suppress notifications for subscriptions matching `(kind, pattern)` for SNOOZE_SECS,
+    /// then auto re-enabled.
+    pub fn snooze_sub(&self, chat_id: i64, kind: &str, pattern: &str) {
         let until = now_ts() + SNOOZE_SECS;
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
-            "INSERT INTO map_mutes(chat_id, map, until) VALUES (?1, ?2, ?3)
-             ON CONFLICT(chat_id, map) DO UPDATE SET until = ?3",
-            params![chat_id, map, until],
+            "INSERT INTO map_mutes(chat_id, kind, pattern, until) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(chat_id, kind, pattern) DO UPDATE SET until = ?4",
+            params![chat_id, kind, pattern, until],
         );
     }
 
-    /// Suppress notifications for `map` forever (manual re-enable needed).
-    pub fn mute_map(&self, chat_id: i64, map: &str) {
+    /// Suppress notifications for subscriptions matching `(kind, pattern)` forever
+    /// (manual re-enable needed).
+    pub fn mute_sub(&self, chat_id: i64, kind: &str, pattern: &str) {
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
-            "INSERT INTO map_mutes(chat_id, map, until) VALUES (?1, ?2, NULL)
-             ON CONFLICT(chat_id, map) DO UPDATE SET until = NULL",
-            params![chat_id, map],
+            "INSERT INTO map_mutes(chat_id, kind, pattern, until) VALUES (?1, ?2, ?3, NULL)
+             ON CONFLICT(chat_id, kind, pattern) DO UPDATE SET until = NULL",
+            params![chat_id, kind, pattern],
         );
     }
 
-    /// Re-enable suppressed maps for users whose snooze expired.
+    /// Re-enable suppressed selectors whose snooze expired.
     pub fn release_expired_map_snoozes(&self) {
         let now = now_ts();
         let conn = self.0.lock().unwrap();
@@ -115,13 +118,13 @@ impl Db {
         );
     }
 
-    pub fn is_map_muted(&self, chat_id: i64, map: &str) -> bool {
+    pub fn is_sub_muted(&self, chat_id: i64, kind: &str, pattern: &str) -> bool {
         self.0
             .lock()
             .unwrap()
             .query_row(
-                "SELECT 1 FROM map_mutes WHERE chat_id = ?1 AND map = ?2",
-                params![chat_id, map],
+                "SELECT 1 FROM map_mutes WHERE chat_id = ?1 AND kind = ?2 AND pattern = ?3",
+                params![chat_id, kind, pattern],
                 |_| Ok(()),
             )
             .is_ok()
@@ -130,15 +133,16 @@ impl Db {
     pub fn list_map_mutes(&self, chat_id: i64) -> Vec<MapMute> {
         let conn = self.0.lock().unwrap();
         let mut stmt = match conn.prepare_cached(
-            "SELECT map, until FROM map_mutes WHERE chat_id = ?1 ORDER BY map",
+            "SELECT kind, pattern, until FROM map_mutes WHERE chat_id = ?1 ORDER BY kind, pattern",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
         stmt.query_map(params![chat_id], |row| {
             Ok(MapMute {
-                map: row.get(0)?,
-                until: row.get(1)?,
+                kind: row.get(0)?,
+                pattern: row.get(1)?,
+                until: row.get(2)?,
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
@@ -214,15 +218,15 @@ impl Db {
             .unwrap_or(false)
     }
 
-    /// Delete a per-map mute entry. Called when a map subscription is removed.
-    pub fn delete_map_mute(&self, chat_id: i64, map: &str) {
+    /// Delete the mute entry for a specific (chat_id, kind, pattern) selector.
+    pub fn delete_map_mute(&self, chat_id: i64, kind: &str, pattern: &str) {
         let _ = self
             .0
             .lock()
             .unwrap()
             .execute(
-                "DELETE FROM map_mutes WHERE chat_id = ?1 AND map = ?2",
-                params![chat_id, map],
+                "DELETE FROM map_mutes WHERE chat_id = ?1 AND kind = ?2 AND pattern = ?3",
+                params![chat_id, kind, pattern],
             );
     }
 
@@ -356,7 +360,7 @@ impl Db {
         if !matched {
             return false;
         }
-        if self.is_map_muted(sub.chat_id, game_map) {
+        if self.is_sub_muted(sub.chat_id, &sub.kind, &sub.pattern) {
             return false;
         }
         if (sub.kind == KIND_MAP || sub.kind == KIND_NAME)
@@ -409,15 +413,13 @@ mod tests {
         let _ = db.add_sub(uid, KIND_MAP, "Tetris");
         let sub = db.list_subs(uid).into_iter().next().unwrap();
 
-        db.mute_map(uid, "Tetris");
-        assert!(db.is_map_muted(uid, "Tetris"));
+        db.mute_sub(uid, KIND_MAP, "Tetris");
+        assert!(db.is_sub_muted(uid, KIND_MAP, "Tetris"));
 
         db.delete_sub(sub.id);
-        if sub.kind == KIND_MAP {
-            db.delete_map_mute(uid, &sub.pattern);
-        }
+        db.delete_map_mute(uid, &sub.kind, &sub.pattern);
 
-        assert!(!db.is_map_muted(uid, "Tetris"));
+        assert!(!db.is_sub_muted(uid, KIND_MAP, "Tetris"));
     }
 
     #[test]
@@ -425,62 +427,67 @@ mod tests {
         let db = memory_db();
         let uid = 1;
         db.ensure_user(uid);
-        db.mute_map(uid, "SomeMap");
-        assert!(db.is_map_muted(uid, "SomeMap"));
+        db.mute_sub(uid, KIND_MAP, "SomeMap");
+        assert!(db.is_sub_muted(uid, KIND_MAP, "SomeMap"));
 
-        db.delete_map_mute(uid, "SomeMap");
-        assert!(!db.is_map_muted(uid, "SomeMap"));
+        db.delete_map_mute(uid, KIND_MAP, "SomeMap");
+        assert!(!db.is_sub_muted(uid, KIND_MAP, "SomeMap"));
     }
 
     #[test]
-    fn delete_host_sub_does_not_touch_mutes() {
+    fn delete_sub_does_not_touch_mutes_of_other_subs() {
         let db = memory_db();
         let uid = 1;
         db.ensure_user(uid);
-        let _ = db.add_sub(uid, KIND_HOST, "SomeHost");
-        let sub = db.list_subs(uid).into_iter().next().unwrap();
+        let _ = db.add_sub(uid, KIND_MAP, "MapA");
+        let _ = db.add_sub(uid, KIND_HOST, "HostA");
+        let subs = db.list_subs(uid);
 
-        db.mute_map(uid, "SomeHost");
+        db.mute_sub(uid, KIND_MAP, "MapA");
+        db.mute_sub(uid, KIND_HOST, "HostA");
 
-        db.delete_sub(sub.id);
-        assert!(db.is_map_muted(uid, "SomeHost"));
+        let map_sub = subs.iter().find(|s| s.kind == KIND_MAP).unwrap().clone();
+        db.delete_sub(map_sub.id);
+        db.delete_map_mute(uid, &map_sub.kind, &map_sub.pattern);
+
+        // host mute survives
+        assert!(!db.is_sub_muted(uid, KIND_MAP, "MapA"));
+        assert!(db.is_sub_muted(uid, KIND_HOST, "HostA"));
     }
 
     #[test]
-    fn migration_cleans_orphaned_map_mutes() {
+    fn migration_legacy_map_mutes_dropped() {
+        // simulate an old database with the legacy `map` column
         let (db, path) = temp_db();
-        let uid = 1;
-        db.ensure_user(uid);
-        let _ = db.add_sub(uid, KIND_MAP, "GhostTower");
-        db.mute_map(uid, "GhostTower");
-
-        // Force-delete sub bypassing delete_sub (simulates old buggy path)
         db.0.lock()
             .unwrap()
-            .execute("DELETE FROM subs WHERE chat_id = ?1", params![uid])
+            .execute("DROP TABLE map_mutes", [])
             .unwrap();
-        assert!(db.is_map_muted(uid, "GhostTower"));
+        db.0.lock()
+            .unwrap()
+            .execute(
+                "CREATE TABLE map_mutes (
+                    chat_id INTEGER NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
+                    map TEXT NOT NULL,
+                    until INTEGER,
+                    PRIMARY KEY (chat_id, map)
+                 )",
+                [],
+            )
+            .unwrap();
+        db.ensure_user(1);
+        db.0.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO map_mutes(chat_id, map, until) VALUES (1, 'LegacyMap', NULL)",
+                [],
+            )
+            .unwrap();
         drop(db);
 
-        // Re-open: migration should clean orphaned mutes
         let db = Db::open(&path).unwrap();
-        assert!(!db.is_map_muted(uid, "GhostTower"));
-        drop(db);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn migration_keeps_valid_map_mutes() {
-        let (db, path) = temp_db();
-        let uid = 1;
-        db.ensure_user(uid);
-        let _ = db.add_sub(uid, KIND_MAP, "ValidMap");
-        db.mute_map(uid, "ValidMap");
-        drop(db);
-
-        // Re-open: valid mute should survive
-        let db = Db::open(&path).unwrap();
-        assert!(db.is_map_muted(uid, "ValidMap"));
+        // legacy rows gone, no new-format entries were created
+        assert!(db.list_map_mutes(1).is_empty());
         drop(db);
         let _ = std::fs::remove_file(&path);
     }
@@ -912,48 +919,49 @@ mod tests {
     // ===================== map mute tests =====================
 
     #[test]
-    fn snooze_map_sets_until() {
+    fn snooze_sub_sets_until() {
         let db = memory_db();
         db.ensure_user(1);
         let before = now_ts();
-        db.snooze_map(1, "SnoozedMap");
+        db.snooze_sub(1, KIND_MAP, "Snoozed");
         let mutes = db.list_map_mutes(1);
         assert_eq!(mutes.len(), 1);
-        assert_eq!(mutes[0].map, "SnoozedMap");
+        assert_eq!(mutes[0].kind, KIND_MAP);
+        assert_eq!(mutes[0].pattern, "Snoozed");
         let until = mutes[0].until.unwrap();
         assert!(until > before);
         assert!(until <= before + SNOOZE_SECS + 1);
     }
 
     #[test]
-    fn snooze_map_overwrites_previous() {
+    fn snooze_sub_overwrites_previous() {
         let db = memory_db();
         db.ensure_user(1);
-        db.snooze_map(1, "Map");
+        db.snooze_sub(1, KIND_MAP, "X");
         let until1 = db.list_map_mutes(1)[0].until.unwrap();
-        db.snooze_map(1, "Map");
+        db.snooze_sub(1, KIND_MAP, "X");
         let until2 = db.list_map_mutes(1)[0].until.unwrap();
         assert!(until2 >= until1);
     }
 
     #[test]
-    fn mute_map_sets_null_until() {
+    fn mute_sub_sets_null_until() {
         let db = memory_db();
         db.ensure_user(1);
-        db.mute_map(1, "PermMuted");
+        db.mute_sub(1, KIND_MAP, "PermMuted");
         let mutes = db.list_map_mutes(1);
         assert_eq!(mutes.len(), 1);
-        assert_eq!(mutes[0].map, "PermMuted");
+        assert_eq!(mutes[0].pattern, "PermMuted");
         assert!(mutes[0].until.is_none());
     }
 
     #[test]
-    fn mute_map_overwrites_snooze() {
+    fn mute_sub_overwrites_snooze() {
         let db = memory_db();
         db.ensure_user(1);
-        db.snooze_map(1, "Map");
+        db.snooze_sub(1, KIND_MAP, "X");
         assert!(db.list_map_mutes(1)[0].until.is_some());
-        db.mute_map(1, "Map");
+        db.mute_sub(1, KIND_MAP, "X");
         assert!(db.list_map_mutes(1)[0].until.is_none());
     }
 
@@ -965,24 +973,39 @@ mod tests {
     }
 
     #[test]
-    fn list_map_mutes_ordered_by_map() {
+    fn list_map_mutes_ordered_by_kind_pattern() {
         let db = memory_db();
         db.ensure_user(1);
-        db.mute_map(1, "Zebra");
-        db.mute_map(1, "Alpha");
-        db.mute_map(1, "Middle");
+        db.mute_sub(1, KIND_MAP, "Zebra");
+        db.mute_sub(1, KIND_MAP, "Alpha");
+        db.mute_sub(1, KIND_NAME, "Middle");
         let mutes = db.list_map_mutes(1);
         assert_eq!(mutes.len(), 3);
-        assert_eq!(mutes[0].map, "Alpha");
-        assert_eq!(mutes[1].map, "Middle");
-        assert_eq!(mutes[2].map, "Zebra");
+        // ORDER BY kind, pattern: "map" < "name" lexicographically.
+        assert_eq!(mutes[0].kind, KIND_MAP);
+        assert_eq!(mutes[0].pattern, "Alpha");
+        assert_eq!(mutes[1].kind, KIND_MAP);
+        assert_eq!(mutes[1].pattern, "Zebra");
+        assert_eq!(mutes[2].kind, KIND_NAME);
+        assert_eq!(mutes[2].pattern, "Middle");
+    }
+
+    #[test]
+    fn mute_scoped_to_kind() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.mute_sub(1, KIND_MAP, "Pudge");
+        assert!(db.is_sub_muted(1, KIND_MAP, "Pudge"));
+        // Same pattern under a different kind is independent
+        assert!(!db.is_sub_muted(1, KIND_NAME, "Pudge"));
+        assert!(!db.is_sub_muted(1, KIND_HOST, "Pudge"));
     }
 
     #[test]
     fn release_expired_snoozes() {
         let db = memory_db();
         db.ensure_user(1);
-        db.snooze_map(1, "Expiring");
+        db.snooze_sub(1, KIND_MAP, "Expiring");
 
         // Manually set until to the past
         db.0.lock().unwrap().execute(
@@ -991,45 +1014,45 @@ mod tests {
         ).unwrap();
 
         db.release_expired_map_snoozes();
-        assert!(!db.is_map_muted(1, "Expiring"));
+        assert!(!db.is_sub_muted(1, KIND_MAP, "Expiring"));
     }
 
     #[test]
     fn release_expired_snoozes_keeps_active() {
         let db = memory_db();
         db.ensure_user(1);
-        db.snooze_map(1, "StillActive");
+        db.snooze_sub(1, KIND_MAP, "StillActive");
 
         // until is far in the future
         db.release_expired_map_snoozes();
-        assert!(db.is_map_muted(1, "StillActive"));
+        assert!(db.is_sub_muted(1, KIND_MAP, "StillActive"));
     }
 
     #[test]
     fn release_expired_snoozes_keeps_permanent_mutes() {
         let db = memory_db();
         db.ensure_user(1);
-        db.mute_map(1, "Permanent");
+        db.mute_sub(1, KIND_MAP, "Permanent");
 
         db.release_expired_map_snoozes();
-        assert!(db.is_map_muted(1, "Permanent"));
+        assert!(db.is_sub_muted(1, KIND_MAP, "Permanent"));
     }
 
     #[test]
-    fn is_map_muted_false_when_not_muted() {
+    fn is_sub_muted_false_when_not_muted() {
         let db = memory_db();
         db.ensure_user(1);
-        assert!(!db.is_map_muted(1, "NotMuted"));
+        assert!(!db.is_sub_muted(1, KIND_MAP, "NotMuted"));
     }
 
     #[test]
-    fn is_map_muted_isolation_between_users() {
+    fn is_sub_muted_isolation_between_users() {
         let db = memory_db();
         db.ensure_user(1);
         db.ensure_user(2);
-        db.mute_map(1, "Map");
-        assert!(db.is_map_muted(1, "Map"));
-        assert!(!db.is_map_muted(2, "Map"));
+        db.mute_sub(1, KIND_MAP, "X");
+        assert!(db.is_sub_muted(1, KIND_MAP, "X"));
+        assert!(!db.is_sub_muted(2, KIND_MAP, "X"));
     }
 
     // ===================== delete_user tests =====================
@@ -1059,10 +1082,10 @@ mod tests {
     fn delete_user_cascades_map_mutes() {
         let db = memory_db();
         db.ensure_user(1);
-        db.mute_map(1, "Muted");
-        assert!(db.is_map_muted(1, "Muted"));
+        db.mute_sub(1, KIND_MAP, "Muted");
+        assert!(db.is_sub_muted(1, KIND_MAP, "Muted"));
         db.delete_user(1);
-        assert!(!db.is_map_muted(1, "Muted"));
+        assert!(!db.is_sub_muted(1, KIND_MAP, "Muted"));
     }
 
     #[test]
@@ -1270,26 +1293,55 @@ mod tests {
         assert!(matching_subs(&db, &g).is_empty());
     }
 
-    // --- muted map ---
+    // --- muted selector ---
 
     #[test]
-    fn integration_muted_map_no_notify() {
+    fn integration_muted_selector_no_notify() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        db.mute_map(1, "Pudge Wars");
+        db.mute_sub(1, KIND_MAP, "Pudge");
         let g = game(1, "Pudge Wars", "Host", "Game");
         assert!(matching_subs(&db, &g).is_empty());
     }
 
     #[test]
-    fn integration_muted_map_different_map_still_notifies() {
+    fn integration_muted_selector_different_selector_still_notifies() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        db.mute_map(1, "Some Other Map");
-        let g = game(1, "Pudge Wars", "Host", "Game");
+        let _ = db.add_sub(1, KIND_MAP, "Dota");
+        db.mute_sub(1, KIND_MAP, "Pudge");
+        let g = game(1, "Dota 2", "Host", "Game");
         assert_eq!(matching_subs(&db, &g).len(), 1);
+    }
+
+    #[test]
+    fn integration_muted_selector_blocks_all_games_matching_selector() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "Pudge");
+        db.mute_sub(1, KIND_MAP, "Pudge");
+        // fuzzy: "Pudge" matches both games
+        let g1 = game(1, "Pudge Wars v2", "Host", "Game");
+        let g2 = game(2, "Pudge Wars 3", "Host", "Game");
+        assert!(matching_subs(&db, &g1).is_empty());
+        assert!(matching_subs(&db, &g2).is_empty());
+    }
+
+    #[test]
+    fn integration_mute_does_not_affect_other_kind() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "Pudge");
+        let _ = db.add_sub(1, KIND_NAME, "Pudge");
+        db.mute_sub(1, KIND_MAP, "Pudge");
+        // name sub still fires
+        let g = game(1, "Other Map", "Host", "Pudge Cup");
+        assert_eq!(matching_subs(&db, &g).len(), 1);
+        // map sub muted
+        let g2 = game(2, "Pudge Wars", "Host", "Other Name");
+        assert_eq!(matching_subs(&db, &g2).len(), 0);
     }
 
     // --- snooze ---
@@ -1299,7 +1351,7 @@ mod tests {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        db.snooze_map(1, "Pudge Wars");
+        db.snooze_sub(1, KIND_MAP, "Pudge");
         let g = game(1, "Pudge Wars", "Host", "Game");
         assert!(matching_subs(&db, &g).is_empty());
     }
@@ -1309,7 +1361,7 @@ mod tests {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        db.snooze_map(1, "Pudge Wars");
+        db.snooze_sub(1, KIND_MAP, "Pudge");
         // expire the snooze
         db.0.lock().unwrap().execute(
             "UPDATE map_mutes SET until = 1 WHERE chat_id = 1",
@@ -1476,7 +1528,7 @@ mod tests {
         let sub = db.list_subs(1).into_iter().next().unwrap();
         db.set_host_filter_mode(sub.id, HF_WHITELIST);
         db.add_sub_host(sub.id, "HellWolf");
-        db.mute_map(1, "Pudge Wars");
+        db.mute_sub(1, KIND_MAP, "Pudge");
 
         let g = game(1, "Pudge Wars", "HellWolf#31976", "Game");
         // muted → blocked even though host matches whitelist
@@ -1484,17 +1536,19 @@ mod tests {
     }
 
     #[test]
-    fn integration_whitelist_plus_different_muted_map() {
+    fn integration_whitelist_plus_different_muted_selector() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        let sub = db.list_subs(1).into_iter().next().unwrap();
-        db.set_host_filter_mode(sub.id, HF_WHITELIST);
-        db.add_sub_host(sub.id, "HellWolf");
-        db.mute_map(1, "Other Map");
+        let _ = db.add_sub(1, KIND_MAP, "Dota");
+        let map_sub = db.list_subs(1).iter().find(|s| s.pattern == "Pudge").unwrap().clone();
+        db.set_host_filter_mode(map_sub.id, HF_WHITELIST);
+        db.add_sub_host(map_sub.id, "HellWolf");
+        // mute a different selector
+        db.mute_sub(1, KIND_MAP, "Dota");
 
         let g = game(1, "Pudge Wars", "HellWolf#31976", "Game");
-        // different map muted, this map + host ok → notified
+        // Pudge not muted → notified
         assert_eq!(matching_subs(&db, &g).len(), 1);
     }
 
@@ -1577,14 +1631,16 @@ mod tests {
     }
 
     #[test]
-    fn integration_snooze_only_this_map() {
+    fn integration_snooze_only_blocks_matching_selector() {
         let db = memory_db();
         db.ensure_user(1);
+        // Two separate selectors; mute only one of them
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        db.snooze_map(1, "Pudge Wars");
+        let _ = db.add_sub(1, KIND_MAP, "Dota");
+        db.snooze_sub(1, KIND_MAP, "Pudge");
 
         let g1 = game(1, "Pudge Wars", "Host", "Game");
-        let g2 = game(2, "Pudge Wars 2", "Host", "Game");
+        let g2 = game(2, "Dota 2", "Host", "Game");
         assert!(matching_subs(&db, &g1).is_empty());
         assert_eq!(matching_subs(&db, &g2).len(), 1);
     }
@@ -1596,7 +1652,7 @@ mod tests {
         db.ensure_user(2);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
         let _ = db.add_sub(2, KIND_MAP, "Pudge");
-        db.mute_map(1, "Pudge Wars");
+        db.mute_sub(1, KIND_MAP, "Pudge");
         // user 2 does not mute
 
         let g = game(1, "Pudge Wars", "Host", "Game");
