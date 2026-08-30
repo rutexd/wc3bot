@@ -2,6 +2,7 @@ mod api;
 mod db;
 mod handlers;
 mod loc;
+mod migrations;
 mod norm;
 mod pinger;
 
@@ -213,6 +214,12 @@ async fn poller(
                 };
                 if matched {
                     if database.is_map_muted(active.chat_id, &game.map) {
+                        continue;
+                    }
+                    // Host filter: applies to map and name subscriptions.
+                    if (active.sub.kind == db::KIND_MAP || active.sub.kind == db::KIND_NAME)
+                        && !database.host_filter_passes(active.sub.id, &game.host)
+                    {
                         continue;
                     }
                     let lang = database.lang(active.chat_id);

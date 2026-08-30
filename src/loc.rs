@@ -111,6 +111,22 @@ pub struct T {
     pub btn_check: &'static str,
     pub msg_snoozed: &'static str,
     pub msg_muted: &'static str,
+    // Host filter
+    pub btn_hosts: &'static str,
+    pub hf_title: &'static str,      // {name}
+    pub hf_mode: &'static str,
+    pub hf_mode_off: &'static str,
+    pub hf_mode_wl: &'static str,
+    pub hf_mode_bl: &'static str,
+    pub hf_hosts_hdr: &'static str,
+    pub hf_hosts_empty: &'static str,
+    pub btn_toggle_mode: &'static str,
+    pub btn_add_hf_host: &'static str,
+    pub prompt_add_hf_host: &'static str,
+    pub msg_hf_host_added: &'static str,   // {host}
+    pub msg_hf_host_deleted: &'static str, // {host}
+    pub hf_desc_wl: &'static str,
+    pub hf_desc_bl: &'static str,
 }
 
 const EN: T = T {
@@ -191,6 +207,21 @@ const EN: T = T {
     btn_check: "✅",
     msg_snoozed: "🔕 Notifications off for 12 hours",
     msg_muted: "🔕 Notifications turned off",
+    btn_hosts: "⚙️ Hosts",
+    hf_title: "⚙️ Host filter: {name}",
+    hf_mode: "Mode",
+    hf_mode_off: "Off",
+    hf_mode_wl: "Whitelist",
+    hf_mode_bl: "Blacklist",
+    hf_hosts_hdr: "Hosts",
+    hf_hosts_empty: "No hosts added",
+    btn_toggle_mode: "🔄 Toggle mode",
+    btn_add_hf_host: "➕ Add host",
+    prompt_add_hf_host: "👤 Send the host name to add to the filter.\n\nExamples: HellWolf#31976, hellwolf",
+    msg_hf_host_added: "✅ Host \u{00ab}{host}\u{00bb} added.",
+    msg_hf_host_deleted: "🗑 Host \u{00ab}{host}\u{00bb} removed.",
+    hf_desc_wl: "Only notify when the host is in the list.",
+    hf_desc_bl: "Skip games hosted by players in the list.",
 };
 
 const RU: T = T {
@@ -272,6 +303,21 @@ const RU: T = T {
     btn_check: "✅",
     msg_snoozed: "🔕 Уведомления выключены на 12 часов",
     msg_muted: "🔕 Уведомления выключены",
+    btn_hosts: "⚙️ Хосты",
+    hf_title: "⚙️ Фильтр хостов: {name}",
+    hf_mode: "Режим",
+    hf_mode_off: "Выкл",
+    hf_mode_wl: "Белый список",
+    hf_mode_bl: "Чёрный список",
+    hf_hosts_hdr: "Хосты",
+    hf_hosts_empty: "Хостов нет",
+    btn_toggle_mode: "🔄 Сменить режим",
+    btn_add_hf_host: "➕ Добавить хоста",
+    prompt_add_hf_host: "👤 Отправь имя хоста для добавления в фильтр.\n\nПримеры: HellWolf#31976, hellwolf",
+    msg_hf_host_added: "✅ Хост «{host}» добавлен.",
+    msg_hf_host_deleted: "🗑 Хост «{host}» удалён.",
+    hf_desc_wl: "Уведомлять только если хост в списке.",
+    hf_desc_bl: "Пропускать игры от хостов из списка.",
 };
 
 pub fn tr(lang: Lang) -> &'static T {

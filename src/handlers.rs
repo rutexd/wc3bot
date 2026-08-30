@@ -19,6 +19,7 @@ pub enum Pending {
     AddName,
     AddAll,
     Rename(i64),
+    AddHostFilter(i64),
 }
 
 #[derive(Clone)]
@@ -200,20 +201,73 @@ fn sub_view(s: &db::Sub, t: &'static T) -> (String, InlineKeyboardMarkup) {
         desc,
     );
     let toggle_label = if s.enabled { t.btn_disable } else { t.btn_enable };
-    let kb = InlineKeyboardMarkup::new(vec![
-        vec![btn(toggle_label, &format!("toggle:{}", s.id))],
-        vec![
-            btn(t.btn_rename, &format!("rename:{}", s.id)),
-            btn(t.btn_delete, &format!("del:{}", s.id)),
-        ],
-        vec![btn(t.btn_to_list, "maps"), btn(t.btn_menu, "menu")],
-    ]);
-    (text, kb)
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    rows.push(vec![btn(toggle_label, &format!("toggle:{}", s.id))]);
+    let mut mid_row = vec![
+        btn(t.btn_rename, &format!("rename:{}", s.id)),
+        btn(t.btn_delete, &format!("del:{}", s.id)),
+    ];
+    if s.kind == db::KIND_MAP || s.kind == db::KIND_NAME {
+        mid_row.push(btn(t.btn_hosts, &format!("hosts:{}", s.id)));
+    }
+    rows.push(mid_row);
+    rows.push(vec![btn(t.btn_to_list, "maps"), btn(t.btn_menu, "menu")]);
+    (text, InlineKeyboardMarkup::new(rows))
 }
 
 /// Клавиатура для режимов ввода текста (добавление/переименование).
 fn cancel_kb(t: &'static T) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![btn(t.btn_cancel, "cancel")]])
+}
+
+fn hf_mode_label(mode: &str, t: &'static T) -> &'static str {
+    match mode {
+        db::HF_WHITELIST => t.hf_mode_wl,
+        db::HF_BLACKLIST => t.hf_mode_bl,
+        _ => t.hf_mode_off,
+    }
+}
+
+fn hf_mode_desc(mode: &str, t: &'static T) -> &'static str {
+    match mode {
+        db::HF_WHITELIST => t.hf_desc_wl,
+        db::HF_BLACKLIST => t.hf_desc_bl,
+        _ => "",
+    }
+}
+
+fn host_filter_screen(
+    sub: &db::Sub,
+    mode: &str,
+    hosts: &[String],
+    t: &'static T,
+) -> (String, InlineKeyboardMarkup) {
+    let title = t.hf_title.replace("{name}", &format!("{} {}", kind_label(sub, t), sub.pattern));
+    let mode_label = hf_mode_label(mode, t);
+    let desc = hf_mode_desc(mode, t);
+
+    let mut text = format!("{}\n\n{}: {}", title, t.hf_mode, mode_label);
+    if !desc.is_empty() {
+        text.push_str(&format!("\n{}", desc));
+    }
+    text.push_str(&format!("\n\n{}:", t.hf_hosts_hdr));
+    if hosts.is_empty() {
+        text.push_str(&format!("\n{}", t.hf_hosts_empty));
+    } else {
+        for h in hosts {
+            text.push_str(&format!("\n• {}", h));
+        }
+    }
+
+    let kb = InlineKeyboardMarkup::new(vec![
+        vec![btn(t.btn_toggle_mode, &format!("hmode:{}", sub.id))],
+        vec![btn(t.btn_add_hf_host, &format!("hadd:{}", sub.id))],
+        vec![btn(
+            t.btn_to_list,
+            &format!("hback:{}", sub.id),
+        )],
+    ]);
+    (text, kb)
 }
 
 /// Клавиатура "Готово / Отмена" для режима массового добавления.
@@ -395,6 +449,22 @@ pub fn handle_message(
                     bot.send_message(chat_id, t.msg_rename_fail)
                         .reply_markup(cancel_kb(t))
                         .await?;
+                }
+            }
+            Some(Pending::AddHostFilter(sub_id)) => {
+                let host: String = trimmed.chars().take(MAX_PATTERN_LEN).collect();
+                let host = host.trim().to_string();
+                if host.is_empty() {
+                    bot.send_message(chat_id, t.msg_empty_name)
+                        .reply_markup(cancel_kb(t))
+                        .await?;
+                } else if let Some(s) = owned_sub(&state, sub_id, uid) {
+                    state.db.add_sub_host(sub_id, &host);
+                    bot.send_message(chat_id, t.msg_hf_host_added.replace("{host}", &host))
+                        .await?;
+                    let (mode, hosts) = state.db.get_host_filter(sub_id);
+                    let (text, kb) = host_filter_screen(&s, &mode, &hosts, t);
+                    show(bot, chat_id, None, text, kb).await?;
                 }
             }
             None => {
@@ -613,7 +683,7 @@ async fn route_callback(
             }
         }
         d => {
-            let mut parts = d.splitn(2, ':');
+            let mut parts = d.splitn(3, ':');
             let op = parts.next().unwrap_or("");
             match op {
                 "snooze" => {
@@ -641,6 +711,66 @@ async fn route_callback(
                         if let Some(mid) = mid {
                             let _ = bot.delete_message(chat_id, mid).await;
                             state.deleted.lock().unwrap().insert((chat_id.0, mid.0));
+                        }
+                    }
+                }
+                "hosts" => {
+                    if let Some(id) = parts.next().and_then(|v| v.parse::<i64>().ok()) {
+                        if let Some(s) = owned_sub(&state, id, uid) {
+                            let (mode, hosts) = state.db.get_host_filter(id);
+                            let (text, kb) = host_filter_screen(&s, &mode, &hosts, t);
+                            show(bot, chat_id, mid, text, kb).await?;
+                        }
+                    }
+                }
+                "hmode" => {
+                    if let Some(id) = parts.next().and_then(|v| v.parse::<i64>().ok()) {
+                        if let Some(s) = owned_sub(&state, id, uid) {
+                            let (mode, _) = state.db.get_host_filter(id);
+                            let new_mode = match mode.as_str() {
+                                db::HF_OFF => db::HF_WHITELIST,
+                                db::HF_WHITELIST => db::HF_BLACKLIST,
+                                _ => db::HF_OFF,
+                            };
+                            state.db.set_host_filter_mode(id, new_mode);
+                            let (mode, hosts) = state.db.get_host_filter(id);
+                            let (text, kb) = host_filter_screen(&s, &mode, &hosts, t);
+                            show(bot, chat_id, mid, text, kb).await?;
+                        }
+                    }
+                }
+                "hadd" => {
+                    if let Some(id) = parts.next().and_then(|v| v.parse::<i64>().ok()) {
+                        if owned_sub(&state, id, uid).is_some() {
+                            state.set_pending(uid, Pending::AddHostFilter(id));
+                            bot.send_message(chat_id, t.prompt_add_hf_host)
+                                .reply_markup(cancel_kb(t))
+                                .await?;
+                        }
+                    }
+                }
+                "hdel" => {
+                    if let Some(sub_id) = parts.next().and_then(|v| v.parse::<i64>().ok()) {
+                        if let Some(s) = owned_sub(&state, sub_id, uid) {
+                            if let Some(host) = parts.next() {
+                                state.db.remove_sub_host(sub_id, host);
+                                let _ = bot
+                                    .answer_callback_query(cq_id)
+                                    .text(t.msg_hf_host_deleted.replace("{host}", host))
+                                    .show_alert(false)
+                                    .await;
+                                let (mode, hosts) = state.db.get_host_filter(sub_id);
+                                let (text, kb) = host_filter_screen(&s, &mode, &hosts, t);
+                                show(bot, chat_id, mid, text, kb).await?;
+                            }
+                        }
+                    }
+                }
+                "hback" => {
+                    if let Some(id) = parts.next().and_then(|v| v.parse::<i64>().ok()) {
+                        if let Some(s) = owned_sub(&state, id, uid) {
+                            let (text, kb) = sub_view(&s, t);
+                            show(bot, chat_id, mid, text, kb).await?;
                         }
                     }
                 }
@@ -675,6 +805,9 @@ async fn route_callback(
                             if let Some(s) = owned_sub(&state, id, uid) {
                                 println!("[del] uid={uid} id={id} name={}", s.pattern);
                                 state.db.delete_sub(id);
+                                if s.kind == db::KIND_MAP {
+                                    state.db.delete_map_mute(uid, &s.pattern);
+                                }
                                 let subs = state.db.list_subs(uid);
                                 show(
                                     bot,
