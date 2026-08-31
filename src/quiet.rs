@@ -10,24 +10,43 @@ pub fn parse_hhmm(s: &str) -> Option<i32> {
     Some(h * 60 + m)
 }
 
-/// Парсинг «UTC±N» или «UTC±N:MM». Примеры: «UTC+3», «UTC-5», «UTC+5:30».
-/// Возвращает смещение в минутах от UTC.
+/// Парсинг смещения от UTC. Принимает формы:
+/// - `UTC+3`, `UTC-5`, `UTC+5:30` (с префиксом UTC, любой регистр)
+/// - `+3`, `-5`, `+5:30` (короткая форма)
+/// - `5`, `5:30` (без знака = положительный)
+/// - `0`, `UTC0`, `UTC` (= 0)
+///
+/// Пустая строка, только знаки (`+`, `-`), и любые невалидные сочетания
+/// возвращают `None`.
 pub fn parse_utc_offset(s: &str) -> Option<i32> {
     let s = s.trim();
-    let rest = s.strip_prefix("UTC").or_else(|| s.strip_prefix("utc"))?;
+    if s.is_empty() {
+        return None;
+    }
+    let rest = s
+        .strip_prefix("UTC")
+        .or_else(|| s.strip_prefix("utc"))
+        .unwrap_or(s);
     let rest = rest.trim();
-    if rest.is_empty() || rest == "0" {
-        return Some(0);
+    if rest.is_empty() {
+        return None;
     }
     let (sign, num) = match rest.chars().next()? {
         '+' => (1i32, &rest[1..]),
         '-' => (-1i32, &rest[1..]),
+        c if c.is_ascii_digit() => (1i32, rest),
         _ => return None,
     };
+    if num.is_empty() {
+        return None;
+    }
     let (h_part, m_part) = match num.split_once(':') {
         Some((h, m)) => (h, m),
         None => (num, "0"),
     };
+    if h_part.is_empty() || m_part.is_empty() {
+        return None;
+    }
     let h: i32 = h_part.parse().ok()?;
     let m: i32 = m_part.parse().ok()?;
     if !(0..24).contains(&h) || !(0..60).contains(&m) {
@@ -87,21 +106,55 @@ mod tests {
 
     #[test]
     fn parse_utc_offset_basic() {
-        assert_eq!(parse_utc_offset("UTC"), Some(0));
         assert_eq!(parse_utc_offset("UTC0"), Some(0));
         assert_eq!(parse_utc_offset("UTC+3"), Some(180));
         assert_eq!(parse_utc_offset("UTC-5"), Some(-300));
         assert_eq!(parse_utc_offset("UTC+5:30"), Some(330));
         assert_eq!(parse_utc_offset("utc+3"), Some(180));
+        // короткие формы без префикса UTC
+        assert_eq!(parse_utc_offset("+3"), Some(180));
+        assert_eq!(parse_utc_offset("-5"), Some(-300));
+        assert_eq!(parse_utc_offset("+5:30"), Some(330));
+        assert_eq!(parse_utc_offset("-5:30"), Some(-330));
+        assert_eq!(parse_utc_offset("5"), Some(300));
+        assert_eq!(parse_utc_offset("5:30"), Some(330));
+        assert_eq!(parse_utc_offset("0"), Some(0));
+        assert_eq!(parse_utc_offset("+0"), Some(0));
+        assert_eq!(parse_utc_offset("-0"), Some(0));
+        // пробелы вокруг
+        assert_eq!(parse_utc_offset("  +3  "), Some(180));
+        assert_eq!(parse_utc_offset("UTC +3"), Some(180));
+        assert_eq!(parse_utc_offset("UTC  +3"), Some(180));
     }
 
     #[test]
     fn parse_utc_offset_invalid() {
+        // пустые и пробельные
         assert!(parse_utc_offset("").is_none());
+        assert!(parse_utc_offset("   ").is_none());
+        // только префикс UTC без числа
+        assert!(parse_utc_offset("UTC").is_none());
+        assert!(parse_utc_offset("UTC  ").is_none());
+        // только знак
+        assert!(parse_utc_offset("+").is_none());
+        assert!(parse_utc_offset("-").is_none());
+        assert!(parse_utc_offset("UTC+").is_none());
+        assert!(parse_utc_offset("UTC-").is_none());
+        // пустые части вокруг `:`
+        assert!(parse_utc_offset("UTC+:30").is_none());
+        assert!(parse_utc_offset("UTC+3:").is_none());
+        assert!(parse_utc_offset("+3:").is_none());
+        // неверный префикс / мусор
         assert!(parse_utc_offset("GMT+3").is_none());
-        assert!(parse_utc_offset("UTC+24").is_none());
-        assert!(parse_utc_offset("UTC+3:60").is_none());
+        assert!(parse_utc_offset("abc").is_none());
+        // нечисловые компоненты
         assert!(parse_utc_offset("UTC+abc").is_none());
+        assert!(parse_utc_offset("+abc").is_none());
+        assert!(parse_utc_offset("UTC+3:abc").is_none());
+        // выход за границы
+        assert!(parse_utc_offset("UTC+24").is_none());
+        assert!(parse_utc_offset("+24:00").is_none());
+        assert!(parse_utc_offset("UTC+3:60").is_none());
     }
 
     /// 2024-01-15 12:00 UTC.
