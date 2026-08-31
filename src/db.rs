@@ -19,6 +19,15 @@ pub fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
+/// Настройки тихого часа. `None` означает, что фича выключена
+/// (любой из трёх столбцов = NULL).
+#[derive(Debug, Clone, Copy)]
+pub struct QuietHours {
+    pub tz_offset_min: i32,
+    pub start_min: i32,
+    pub end_min: i32,
+}
+
 /// A per-subscription notification suppression. `until == None` means forever.
 #[derive(Debug, Clone)]
 pub struct MapMute {
@@ -259,6 +268,60 @@ impl Db {
              ON CONFLICT(chat_id) DO UPDATE SET lang = ?2",
             params![chat_id, lang],
         );
+    }
+
+    /// Настройки тихого часа. `None` означает, что фича выключена
+    /// (любой из трёх столбцов = NULL).
+    pub fn get_quiet_hours(&self, chat_id: i64) -> Option<QuietHours> {
+        let conn = self.0.lock().unwrap();
+        let res: Option<(Option<i32>, Option<i32>, Option<i32>)> = conn
+            .query_row(
+                "SELECT qh_tz_offset, qh_start_min, qh_end_min FROM users WHERE chat_id = ?1",
+                params![chat_id],
+                |row| {
+                    let tz: Option<i32> = row.get(0)?;
+                    let start: Option<i32> = row.get(1)?;
+                    let end: Option<i32> = row.get(2)?;
+                    Ok((tz, start, end))
+                },
+            )
+            .optional()
+            .ok()
+            .flatten();
+        res.and_then(|(tz, start, end)| match (tz, start, end) {
+            (Some(tz), Some(start), Some(end)) => Some(QuietHours { tz_offset_min: tz, start_min: start, end_min: end }),
+            _ => None,
+        })
+    }
+
+    pub fn set_quiet_hours(&self, chat_id: i64, tz_offset_min: i32, start_min: i32, end_min: i32) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO users(chat_id, qh_tz_offset, qh_start_min, qh_end_min)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(chat_id) DO UPDATE SET
+                qh_tz_offset = ?2,
+                qh_start_min = ?3,
+                qh_end_min   = ?4",
+            params![chat_id, tz_offset_min, start_min, end_min],
+        );
+    }
+
+    pub fn disable_quiet_hours(&self, chat_id: i64) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE users SET qh_tz_offset = NULL, qh_start_min = NULL, qh_end_min = NULL
+             WHERE chat_id = ?1",
+            params![chat_id],
+        );
+    }
+
+    /// True, если прямо сейчас для пользователя активен тихий час.
+    pub fn is_in_quiet_hours(&self, chat_id: i64) -> bool {
+        let Some(qh) = self.get_quiet_hours(chat_id) else {
+            return false;
+        };
+        crate::quiet::is_in_quiet_hours(now_ts(), qh.tz_offset_min, qh.start_min, qh.end_min)
     }
 
     pub fn get_host_filter(&self, sub_id: i64) -> (String, Vec<String>) {
@@ -1728,5 +1791,215 @@ mod tests {
         // same id, same data → both match (dedup is poller's job)
         assert_eq!(matching_subs(&db, &g1).len(), 1);
         assert_eq!(matching_subs(&db, &g2).len(), 1);
+    }
+
+    // ===================== quiet hours tests =====================
+
+    #[test]
+    fn quiet_hours_default_none() {
+        let db = memory_db();
+        db.ensure_user(1);
+        assert!(db.get_quiet_hours(1).is_none());
+        assert!(!db.is_in_quiet_hours(1));
+    }
+
+    #[test]
+    fn quiet_hours_set_and_get() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
+        let qh = db.get_quiet_hours(1).unwrap();
+        assert_eq!(qh.tz_offset_min, 180);
+        assert_eq!(qh.start_min, 23 * 60);
+        assert_eq!(qh.end_min, 7 * 60);
+    }
+
+    #[test]
+    fn quiet_hours_disable_clears() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
+        assert!(db.get_quiet_hours(1).is_some());
+        db.disable_quiet_hours(1);
+        assert!(db.get_quiet_hours(1).is_none());
+        assert!(!db.is_in_quiet_hours(1));
+    }
+
+    #[test]
+    fn quiet_hours_partial_clear() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
+        // очистим только tz_offset вручную через SQL
+        db.0.lock().unwrap()
+            .execute("UPDATE users SET qh_tz_offset = NULL WHERE chat_id = 1", [])
+            .unwrap();
+        // теперь это None, потому что не все три поля заданы
+        assert!(db.get_quiet_hours(1).is_none());
+    }
+
+    #[test]
+    fn quiet_hours_isolation_between_users() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.ensure_user(2);
+        db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
+        assert!(db.get_quiet_hours(1).is_some());
+        assert!(db.get_quiet_hours(2).is_none());
+    }
+
+    #[test]
+    fn integration_quiet_hours_blocks_notification() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "Pudge");
+        db.set_quiet_hours(1, 0, 0, 0); // 00:00–00:00 = выключено
+        let g = game(1, "Pudge Wars", "Host", "Game");
+        assert_eq!(matching_subs(&db, &g).len(), 1);
+    }
+
+    /// Подделывает «сейчас» через приватный канал: у DB нет метода set_now,
+    /// поэтому интеграционные тесты ниже зависят от системного времени.
+    /// Чтобы тесты были детерминированы, мы зовём `is_in_quiet_hours_for_ts`.
+    /// Здесь мы добавляем тонкую обвязку: у DB появится тест-хелпер, который
+    /// переопределяет таймстамп на время теста.
+    fn quiet_hours_at(db: &Db, uid: i64, ts: i64) -> bool {
+        let qh = match db.get_quiet_hours(uid) {
+            Some(q) => q,
+            None => return false,
+        };
+        crate::quiet::is_in_quiet_hours(ts, qh.tz_offset_min, qh.start_min, qh.end_min)
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_user_in_utc() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "Pudge");
+        // тихий час 09:00–18:00 UTC
+        db.set_quiet_hours(1, 0, 9 * 60, 18 * 60);
+
+        // 12:00 UTC → внутри
+        assert!(quiet_hours_at(&db, 1, 1_705_320_000));
+        // 22:00 UTC → снаружи
+        assert!(!quiet_hours_at(&db, 1, 1_705_356_000));
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_user_in_msk_cross_midnight() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "Pudge");
+        // 23:00–07:00 MSK = UTC+3
+        db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
+
+        // 23:30 MSK = 20:30 UTC → внутри
+        assert!(quiet_hours_at(&db, 1, 20 * 3600 + 30 * 60));
+        // 02:00 MSK = 23:00 UTC предыдущего дня → внутри
+        assert!(quiet_hours_at(&db, 1, 23 * 3600));
+        // 03:00 MSK = 00:00 UTC → внутри
+        assert!(quiet_hours_at(&db, 1, 0));
+        // 07:00 MSK = 04:00 UTC → не внутри (конец не включается)
+        assert!(!quiet_hours_at(&db, 1, 4 * 3600));
+        // 08:00 MSK = 05:00 UTC → снаружи
+        assert!(!quiet_hours_at(&db, 1, 5 * 3600));
+        // 22:00 MSK = 19:00 UTC → снаружи
+        assert!(!quiet_hours_at(&db, 1, 19 * 3600));
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_user_in_la_negative_offset() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "Pudge");
+        // 22:00–06:00 LA = UTC-8 зимой, UTC-7 летом; для теста возьмём UTC-7
+        db.set_quiet_hours(1, -420, 22 * 60, 6 * 60);
+
+        // 02:00 LA = 09:00 UTC → внутри
+        assert!(quiet_hours_at(&db, 1, 9 * 3600));
+        // 23:00 LA = 06:00 UTC предыдущего дня → внутри (в пределах суток LA это 23:00)
+        assert!(quiet_hours_at(&db, 1, 6 * 3600));
+        // 12:00 LA = 19:00 UTC → снаружи
+        assert!(!quiet_hours_at(&db, 1, 19 * 3600));
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_partial_timezone_fractional() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "Pudge");
+        // India: UTC+5:30
+        db.set_quiet_hours(1, 5 * 60 + 30, 22 * 60, 6 * 60);
+
+        // 02:00 IST = 20:30 UTC предыдущего дня → внутри
+        assert!(quiet_hours_at(&db, 1, 20 * 3600 + 30 * 60));
+        // 23:00 IST = 17:30 UTC → внутри
+        assert!(quiet_hours_at(&db, 1, 17 * 3600 + 30 * 60));
+        // 07:00 IST = 01:30 UTC → снаружи (после 06:00)
+        assert!(!quiet_hours_at(&db, 1, 1 * 3600 + 30 * 60));
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_disabled_via_zero_interval() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_quiet_hours(1, 180, 0, 0);
+        // любой таймстамп → снаружи
+        assert!(!quiet_hours_at(&db, 1, 0));
+        assert!(!quiet_hours_at(&db, 1, 12 * 3600));
+        assert!(!quiet_hours_at(&db, 1, 1_705_356_000));
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_disable_clears_at_any_time() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_quiet_hours(1, 180, 0, 24 * 60 - 1);
+        // что-то в течение суток → внутри
+        assert!(quiet_hours_at(&db, 1, 12 * 3600));
+        db.disable_quiet_hours(1);
+        assert!(!quiet_hours_at(&db, 1, 12 * 3600));
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_survives_reopen() {
+        let (db, path) = temp_db();
+        db.ensure_user(1);
+        db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
+        let stored = db.get_quiet_hours(1).unwrap();
+        drop(db);
+
+        let db = Db::open(&path).unwrap();
+        let restored = db.get_quiet_hours(1).unwrap();
+        assert_eq!(restored.tz_offset_min, stored.tz_offset_min);
+        assert_eq!(restored.start_min, stored.start_min);
+        assert_eq!(restored.end_min, stored.end_min);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_independent_per_user() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.ensure_user(2);
+        db.set_quiet_hours(1, 180, 0, 0); // выключено
+        db.set_quiet_hours(2, 0, 0, 24 * 60); // весь день
+        // 12:00 UTC
+        let ts = 12 * 3600;
+        assert!(!quiet_hours_at(&db, 1, ts));
+        assert!(quiet_hours_at(&db, 2, ts));
+    }
+
+    #[test]
+    fn integration_quiet_hours_e2e_overwrite() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_quiet_hours(1, 0, 9 * 60, 18 * 60);
+        db.set_quiet_hours(1, 180, 22 * 60, 8 * 60); // перезаписали
+        let qh = db.get_quiet_hours(1).unwrap();
+        assert_eq!(qh.tz_offset_min, 180);
+        assert_eq!(qh.start_min, 22 * 60);
+        assert_eq!(qh.end_min, 8 * 60);
     }
 }

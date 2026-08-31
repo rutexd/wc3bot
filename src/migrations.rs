@@ -69,4 +69,19 @@ pub fn run(conn: &Connection) {
         "ALTER TABLE subs ADD COLUMN host_filter TEXT NOT NULL DEFAULT 'off'",
         [],
     );
+
+    // 004: quiet hours — UTC offset in minutes plus start/end minutes-of-day in that offset.
+    //      NULL columns mean the feature is disabled for that user.
+    let _ = conn.execute(
+        "ALTER TABLE users ADD COLUMN qh_tz_offset INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE users ADD COLUMN qh_start_min INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE users ADD COLUMN qh_end_min INTEGER",
+        [],
+    );
 }

@@ -26,6 +26,20 @@ impl Lang {
             Lang::Ru => Lang::En,
         }
     }
+
+    /// Форматирует смещение от UTC в минутах в «UTC±H:MM».
+    pub fn format_tz_offset(self, offset_min: i32) -> String {
+        let t = tr(self);
+        let sign = if offset_min < 0 { "-" } else { "+" };
+        let abs = offset_min.unsigned_abs();
+        let h = abs / 60;
+        let m = abs % 60;
+        t.tz_label.replace("{sign}", sign).replace("{h}", &h.to_string()).replace("{m:02}", &format!("{:02}", m))
+    }
+
+    pub fn format_minutes(self, min: i32) -> String {
+        format!("{:02}:{:02}", min / 60, min % 60)
+    }
 }
 
 pub struct T {
@@ -127,6 +141,26 @@ pub struct T {
     pub msg_hf_host_deleted: &'static str, // {host}
     pub hf_desc_wl: &'static str,
     pub hf_desc_bl: &'static str,
+    // Quiet hours / settings menu
+    pub btn_settings: &'static str,
+    pub btn_quiet: &'static str,
+    pub quiet_title: &'static str,         // {start} {end} {tz}
+    pub quiet_on: &'static str,
+    pub quiet_off: &'static str,
+    pub quiet_disabled: &'static str,
+    pub btn_quiet_setup: &'static str,
+    pub btn_quiet_disable: &'static str,
+    pub btn_quiet_back: &'static str,
+    pub prompt_qh_start: &'static str,
+    pub prompt_qh_end: &'static str,
+    pub prompt_qh_tz: &'static str,
+    pub msg_qh_bad_time: &'static str,
+    pub msg_qh_bad_tz: &'static str,
+    pub msg_qh_invalid_range: &'static str,
+    pub msg_qh_saved: &'static str, // {start} {end} {tz}
+    pub msg_qh_disabled: &'static str,
+    pub st_quiet_hdr: &'static str,
+    pub tz_label: &'static str, // {sign}{h}:{m:02}
 }
 
 const EN: T = T {
@@ -222,6 +256,25 @@ const EN: T = T {
     msg_hf_host_deleted: "🗑 Host \u{00ab}{host}\u{00bb} removed.",
     hf_desc_wl: "Only notify when the host is in the list.",
     hf_desc_bl: "Skip games hosted by players in the list.",
+    btn_settings: "⚙️ Settings",
+    btn_quiet: "🌙 Quiet hours",
+    quiet_title: "🌙 Quiet hours: {start}–{end} ({tz})",
+    quiet_on: "✅ Active",
+    quiet_off: "❌ Disabled",
+    quiet_disabled: "🌙 Quiet hours are disabled.\n\nNotifications are sent at any time.",
+    btn_quiet_setup: "✏️ Set up",
+    btn_quiet_disable: "🔕 Turn off",
+    btn_quiet_back: "⬅️ Back",
+    prompt_qh_start: "🌙 Send the start time in HH:MM format.\n\nExample: 23:00",
+    prompt_qh_end: "🌙 Send the end time in HH:MM format.\n\nExample: 07:00 (can be earlier than the start — e.g. 23:00–07:00).",
+    prompt_qh_tz: "🌙 Send your UTC offset, e.g. UTC+3, UTC-5, UTC+5:30.",
+    msg_qh_bad_time: "⚠️ Invalid time. Use HH:MM, e.g. 23:00.",
+    msg_qh_bad_tz: "⚠️ Invalid UTC offset. Example: UTC+3 or UTC-5:30.",
+    msg_qh_invalid_range: "⚠️ Start and end times must be different.",
+    msg_qh_saved: "✅ Quiet hours saved: {start}–{end} ({tz}).",
+    msg_qh_disabled: "🔕 Quiet hours disabled.",
+    st_quiet_hdr: "Quiet hours",
+    tz_label: "{sign}{h}:{m:02}",
 };
 
 const RU: T = T {
@@ -318,6 +371,25 @@ const RU: T = T {
     msg_hf_host_deleted: "🗑 Хост «{host}» удалён.",
     hf_desc_wl: "Уведомлять только если хост в списке.",
     hf_desc_bl: "Пропускать игры от хостов из списка.",
+    btn_settings: "⚙️ Настройки",
+    btn_quiet: "🌙 Тихий час",
+    quiet_title: "🌙 Тихий час: {start}–{end} ({tz})",
+    quiet_on: "✅ Включён",
+    quiet_off: "❌ Выключен",
+    quiet_disabled: "🌙 Тихий час выключен.\n\nУведомления приходят в любое время.",
+    btn_quiet_setup: "✏️ Настроить",
+    btn_quiet_disable: "🔕 Выключить",
+    btn_quiet_back: "⬅️ Назад",
+    prompt_qh_start: "🌙 Отправь время начала в формате HH:MM.\n\nНапример: 23:00",
+    prompt_qh_end: "🌙 Отправь время конца в формате HH:MM.\n\nНапример: 07:00 (может быть раньше начала — например, 23:00–07:00).",
+    prompt_qh_tz: "🌙 Отправь своё смещение от UTC, например UTC+3, UTC-5, UTC+5:30.",
+    msg_qh_bad_time: "⚠️ Неверное время. Используй HH:MM, например 23:00.",
+    msg_qh_bad_tz: "⚠️ Неверное смещение от UTC. Пример: UTC+3 или UTC-5:30.",
+    msg_qh_invalid_range: "⚠️ Время начала и конца должны различаться.",
+    msg_qh_saved: "✅ Тихий час сохранён: {start}–{end} ({tz}).",
+    msg_qh_disabled: "🔕 Тихий час выключен.",
+    st_quiet_hdr: "Тихий час",
+    tz_label: "{sign}{h}:{m:02}",
 };
 
 pub fn tr(lang: Lang) -> &'static T {

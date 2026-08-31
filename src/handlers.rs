@@ -25,6 +25,9 @@ pub enum Pending {
     AddAll,
     Rename(i64),
     AddHostFilter(i64),
+    QhStart,
+    QhEnd { start_min: i32 },
+    QhTz { start_min: i32, end_min: i32 },
 }
 
 #[derive(Clone)]
@@ -89,11 +92,13 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
         vec![btn(t.btn_maps, "maps"), btn(t.btn_status, "status")],
     ];
     rows.extend(add_buttons_kb(t));
-    rows.push(vec![btn(notif_label, "notif"), btn(t.btn_lang, "lang")]);
+    rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
+    rows.push(vec![btn(t.btn_lang, "lang")]);
     InlineKeyboardMarkup::new(rows)
 }
 
 fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
+    let lang = db.lang(uid);
     let notif = if db.notifications_enabled(uid) {
         t.st_enabled
     } else {
@@ -144,6 +149,18 @@ fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
             text.push_str(&format!("\n• {} {} — {}", kind_label(&m.kind, t), m.pattern, dur));
         }
     }
+
+    text.push_str(&format!("\n\n{}:", t.st_quiet_hdr));
+    match db.get_quiet_hours(uid) {
+        None => text.push_str(&format!("\n{}", t.quiet_off)),
+        Some(qh) => {
+            let start = lang.format_minutes(qh.start_min);
+            let end = lang.format_minutes(qh.end_min);
+            let tz = lang.format_tz_offset(qh.tz_offset_min);
+            text.push_str(&format!("\n• {}–{} ({})", start, end, tz));
+        }
+    }
+
     text
 }
 
@@ -280,6 +297,46 @@ fn done_kb(t: &'static T) -> InlineKeyboardMarkup {
         vec![btn(t.btn_done, "done")],
         vec![btn(t.btn_cancel, "cancel")],
     ])
+}
+
+fn settings_text(t: &'static T) -> String {
+    t.btn_settings.into()
+}
+
+fn settings_kb(t: &'static T) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![btn(t.btn_quiet, "quiet")],
+        vec![btn(t.btn_main_menu, "menu")],
+    ])
+}
+
+fn quiet_screen_text(db: &Db, uid: i64, t: &'static T) -> String {
+    let lang = db.lang(uid);
+    match db.get_quiet_hours(uid) {
+        None => t.quiet_disabled.into(),
+        Some(qh) => {
+            let start = lang.format_minutes(qh.start_min);
+            let end = lang.format_minutes(qh.end_min);
+            let tz = lang.format_tz_offset(qh.tz_offset_min);
+            let status = if db.is_in_quiet_hours(uid) { t.quiet_on } else { t.quiet_off };
+            format!(
+                "{}\n\n{}: {}",
+                t.quiet_title.replace("{start}", &start).replace("{end}", &end).replace("{tz}", &tz),
+                t.btn_quiet,
+                status
+            )
+        }
+    }
+}
+
+fn quiet_kb(db: &Db, uid: i64, t: &'static T) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    rows.push(vec![btn(t.btn_quiet_setup, "qh_setup")]);
+    if db.get_quiet_hours(uid).is_some() {
+        rows.push(vec![btn(t.btn_quiet_disable, "qh_off")]);
+    }
+    rows.push(vec![btn(t.btn_quiet_back, "settings")]);
+    InlineKeyboardMarkup::new(rows)
 }
 
 async fn show(
@@ -435,6 +492,73 @@ pub fn handle_message(
             }
             Some(Pending::AddAll) => {
                 add_all_flow(bot, state, chat_id, trimmed, t).await;
+            }
+            Some(Pending::QhStart) => {
+                match crate::quiet::parse_hhmm(trimmed) {
+                    Some(start) => {
+                        state.set_pending(uid, Pending::QhEnd { start_min: start });
+                        bot.send_message(chat_id, t.prompt_qh_end)
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                    None => {
+                        state.set_pending(uid, Pending::QhStart);
+                        bot.send_message(chat_id, t.msg_qh_bad_time)
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                }
+            }
+            Some(Pending::QhEnd { start_min }) => {
+                match crate::quiet::parse_hhmm(trimmed) {
+                    Some(end) if end != start_min => {
+                        state.set_pending(uid, Pending::QhTz { start_min, end_min: end });
+                        bot.send_message(chat_id, t.prompt_qh_tz)
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                    Some(_) => {
+                        state.set_pending(uid, Pending::QhEnd { start_min });
+                        bot.send_message(chat_id, t.msg_qh_invalid_range)
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                    None => {
+                        state.set_pending(uid, Pending::QhEnd { start_min });
+                        bot.send_message(chat_id, t.msg_qh_bad_time)
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                }
+            }
+            Some(Pending::QhTz { start_min, end_min }) => {
+                match crate::quiet::parse_utc_offset(trimmed) {
+                    Some(tz) => {
+                        state.db.set_quiet_hours(uid, tz, start_min, end_min);
+                        state.clear_pending(uid);
+                        let lang = state.db.lang(uid);
+                        let msg = t.msg_qh_saved
+                            .replace("{start}", &lang.format_minutes(start_min))
+                            .replace("{end}", &lang.format_minutes(end_min))
+                            .replace("{tz}", &lang.format_tz_offset(tz));
+                        show_pinned(
+                            bot.clone(),
+                            chat_id,
+                            None,
+                            quiet_screen_text(&state.db, uid, t),
+                            quiet_kb(&state.db, uid, t),
+                            state.bot_id,
+                        )
+                        .await?;
+                        bot.send_message(chat_id, msg).await?;
+                    }
+                    None => {
+                        state.set_pending(uid, Pending::QhTz { start_min, end_min });
+                        bot.send_message(chat_id, t.msg_qh_bad_tz)
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                }
             }
             Some(Pending::Rename(id)) => {
                 let new_name = sanitize_input(trimmed);
@@ -604,6 +728,21 @@ async fn route_callback(
         "maps" => {
             let subs = state.db.list_subs(uid);
             show(bot, chat_id, mid, maps_text(&state, uid, t), maps_kb(&subs, t)).await?;
+        }
+        "settings" => {
+            show_pinned(bot, chat_id, mid, settings_text(t), settings_kb(t), state.bot_id).await?;
+        }
+        "quiet" => {
+            show_pinned(bot, chat_id, mid, quiet_screen_text(&state.db, uid, t), quiet_kb(&state.db, uid, t), state.bot_id).await?;
+        }
+        "qh_setup" => {
+            state.set_pending(uid, Pending::QhStart);
+            bot.send_message(chat_id, t.prompt_qh_start).reply_markup(cancel_kb(t)).await?;
+        }
+        "qh_off" => {
+            state.db.disable_quiet_hours(uid);
+            let _ = bot.answer_callback_query(cq_id).text(t.msg_qh_disabled).await;
+            show_pinned(bot, chat_id, mid, quiet_screen_text(&state.db, uid, t), quiet_kb(&state.db, uid, t), state.bot_id).await?;
         }
         "status" | "notif" => {
             if data == "notif" {

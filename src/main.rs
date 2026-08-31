@@ -5,6 +5,7 @@ mod loc;
 mod migrations;
 mod norm;
 mod pinger;
+mod quiet;
 
 use anyhow::{bail, Context, Result};
 use std::{
@@ -208,7 +209,18 @@ async fn poller(
                 continue;
             }
 
-            for active in database.all_active_subs() {
+            let active = database.all_active_subs();
+            let mut quiet_cache: HashMap<i64, bool> = HashMap::new();
+            for active in &active {
+                if !quiet_cache.contains_key(&active.chat_id) {
+                    quiet_cache.insert(active.chat_id, database.is_in_quiet_hours(active.chat_id));
+                }
+            }
+
+            for active in active {
+                if *quiet_cache.get(&active.chat_id).unwrap_or(&false) {
+                    continue;
+                }
                 if database.should_notify(&active.sub, &game.map, &game.host, &game.name) {
                     let lang = database.lang(active.chat_id);
                     match bot
