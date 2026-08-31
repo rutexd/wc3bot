@@ -66,20 +66,15 @@ pub struct T {
     pub st_notifications: &'static str,
     pub st_enabled: &'static str,
     pub st_disabled: &'static str,
-    pub st_total: &'static str,
-    pub st_active_count: &'static str,
-    pub st_no_active: &'static str,
+    
     pub st_muted_hdr: &'static str,
-    pub st_muted_empty: &'static str,
     pub st_forever: &'static str,
     pub st_remaining: &'static str,
     pub st_h: &'static str,
     pub st_m: &'static str,
     // Manage screen
-    pub manage_title: &'static str, // {n}
     pub manage_hint: &'static str,
     pub manage_empty: &'static str,
-    pub manage_subs_hdr: &'static str,
     // Subscription view
     pub sub_id: &'static str, // {id}
     pub sub_name: &'static str,
@@ -159,6 +154,7 @@ pub struct T {
     pub msg_qh_saved: &'static str, // {start} {end} {tz}
     pub msg_qh_disabled: &'static str,
     pub st_quiet_hdr: &'static str,
+    pub st_subs_hdr: &'static str,
     pub tz_label: &'static str, // {sign}{h}:{m:02}
 }
 
@@ -187,19 +183,13 @@ const EN: T = T {
     st_notifications: "Notifications",
     st_enabled: "✅ Enabled",
     st_disabled: "❌ Disabled",
-    st_total: "Total maps",
-    st_active_count: "Active maps",
-    st_no_active: "No active maps",
-    st_muted_hdr: "Suppressed maps",
-    st_muted_empty: "No suppressed maps",
+    st_muted_hdr: "Suppressed",
     st_forever: "forever",
     st_remaining: "left",
     st_h: "h",
     st_m: "m",
-    manage_title: "📊 Status & Management ({n}):",
-    manage_hint: "\n\nTap a subscription below to configure it.",
-    manage_empty: "No subscriptions yet — add one with the buttons above.",
-    manage_subs_hdr: "Your subscriptions",
+    manage_hint: "\nTap a button below to edit.",
+    manage_empty: "No subscriptions yet.",
     sub_id: "Subscription #{id}",
     sub_name: "Name",
     sub_type: "Type",
@@ -272,6 +262,7 @@ const EN: T = T {
     msg_qh_saved: "✅ Notification window saved: {start}–{end} ({tz}).",
     msg_qh_disabled: "🔕 Notification window disabled.",
     st_quiet_hdr: "Notification window",
+    st_subs_hdr: "Your subscriptions",
     tz_label: "{sign}{h}:{m:02}",
 };
 
@@ -301,19 +292,13 @@ const RU: T = T {
     st_notifications: "Уведомления",
     st_enabled: "✅ Включены",
     st_disabled: "❌ Выключены",
-    st_total: "Всего карт",
-    st_active_count: "Активных карт",
-    st_no_active: "Активных карт нет",
-    st_muted_hdr: "Отключённые карты",
-    st_muted_empty: "Отключённых карт нет",
+    st_muted_hdr: "Отключённые",
     st_forever: "навсегда",
     st_remaining: "осталось",
     st_h: "ч",
     st_m: "мин",
-    manage_title: "📊 Статус и Управление ({n}):",
-    manage_hint: "\n\nНажми на подписку ниже, чтобы настроить её.",
-    manage_empty: "Подписок пока нет — добавь одну кнопками выше.",
-    manage_subs_hdr: "Твои подписки",
+    manage_hint: "\nНажми кнопку ниже, чтобы изменить.",
+    manage_empty: "Подписок пока нет.",
     sub_id: "Подписка #{id}",
     sub_name: "Название",
     sub_type: "Тип",
@@ -386,6 +371,7 @@ const RU: T = T {
     msg_qh_saved: "✅ Время уведомлений сохранено: {start}–{end} ({tz}).",
     msg_qh_disabled: "🔕 Время уведомлений выключено.",
     st_quiet_hdr: "Время уведомлений",
+    st_subs_hdr: "Твои подписки",
     tz_label: "{sign}{h}:{m:02}",
 };
 

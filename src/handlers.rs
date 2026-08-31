@@ -97,7 +97,7 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
     InlineKeyboardMarkup::new(rows)
 }
 
-fn status_body(db: &Db, uid: i64, t: &'static T) -> String {
+fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
     let lang = db.lang(uid);
     let notif = if db.notifications_enabled(uid) {
         t.st_enabled
@@ -105,38 +105,17 @@ fn status_body(db: &Db, uid: i64, t: &'static T) -> String {
         t.st_disabled
     };
     let subs = db.list_subs(uid);
-    let active_count = subs.iter().filter(|s| s.enabled).count();
+
     let mut text = format!(
-        "{}\n\n{}: {}\n{}: {}\n{}: {}",
+        "{}\n\n{}: {}",
         t.st_hdr,
         t.st_notifications,
         notif,
-        t.st_total,
-        subs.len(),
-        t.st_active_count,
-        active_count
     );
-    if active_count == 0 {
-        text.push_str("\n\n");
-        text.push_str(t.st_no_active);
-    } else {
-        for (kind, label) in [(db::KIND_MAP, t.kind_map), (db::KIND_HOST, t.kind_host), (db::KIND_NAME, t.kind_name)] {
-            let items: Vec<_> = subs.iter().filter(|s| s.enabled && s.kind == kind).collect();
-            if items.is_empty() {
-                continue;
-            }
-            text.push_str(&format!("\n\n{}:", label));
-            for s in items {
-                text.push_str(&format!("\n• {}", s.pattern));
-            }
-        }
-    }
 
     let mutes = db.list_map_mutes(uid);
-    text.push_str(&format!("\n\n{}:", t.st_muted_hdr));
-    if mutes.is_empty() {
-        text.push_str(&format!("\n{}", t.st_muted_empty));
-    } else {
+    if !mutes.is_empty() {
+        text.push_str(&format!("\n\n{}:", t.st_muted_hdr));
         let now = crate::db::now_ts();
         for m in &mutes {
             let dur = match m.until {
@@ -157,25 +136,17 @@ fn status_body(db: &Db, uid: i64, t: &'static T) -> String {
             let start = lang.format_minutes(qh.start_min);
             let end = lang.format_minutes(qh.end_min);
             let tz = lang.format_tz_offset(qh.tz_offset_min);
-            text.push_str(&format!("\n• {}–{} ({})", start, end, tz));
+            text.push_str(&format!("\n{}–{} ({tz})", start, end));
         }
     }
 
-    text
-}
-
-/// Combined View & Manage screen: status body + interactive sub buttons.
-fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
-    let subs = db.list_subs(uid);
-    let mut text = status_body(db, uid, t);
-    text.push_str(&format!("\n\n{}", t.manage_title.replace("{n}", &subs.len().to_string())));
+    text.push_str(&format!("\n\n{}\n", t.st_subs_hdr));
     if subs.is_empty() {
-        text.push_str(&format!("\n{}", t.manage_empty));
+        text.push_str(&format!("{}\n", t.manage_empty));
     } else {
-        text.push_str(&format!("\n{}\n", t.manage_subs_hdr));
         for s in &subs {
             let icon = if s.enabled { "✅" } else { "❌" };
-            text.push_str(&format!("\n• {} {} {}", icon, kind_label(&s.kind, t), s.pattern));
+            text.push_str(&format!("{} {} {}\n", icon, kind_label(&s.kind, t), s.pattern));
         }
         text.push_str(t.manage_hint);
     }
