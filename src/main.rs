@@ -210,15 +210,18 @@ async fn poller(
             }
 
             let active = database.all_active_subs();
-            let mut quiet_cache: HashMap<i64, bool> = HashMap::new();
+            let mut active_window_cache: HashMap<i64, bool> = HashMap::new();
             for active in &active {
-                if !quiet_cache.contains_key(&active.chat_id) {
-                    quiet_cache.insert(active.chat_id, database.is_in_quiet_hours(active.chat_id));
+                if !active_window_cache.contains_key(&active.chat_id) {
+                    active_window_cache.insert(
+                        active.chat_id,
+                        database.is_in_notification_window(active.chat_id),
+                    );
                 }
             }
 
             for active in active {
-                if *quiet_cache.get(&active.chat_id).unwrap_or(&false) {
+                if !*active_window_cache.get(&active.chat_id).unwrap_or(&true) {
                     continue;
                 }
                 if database.should_notify(&active.sub, &game.map, &game.host, &game.name) {

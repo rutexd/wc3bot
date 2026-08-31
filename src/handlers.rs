@@ -299,7 +299,7 @@ fn quiet_screen_text(db: &Db, uid: i64, t: &'static T) -> String {
             let start = lang.format_minutes(qh.start_min);
             let end = lang.format_minutes(qh.end_min);
             let tz = lang.format_tz_offset(qh.tz_offset_min);
-            let status = if db.is_in_quiet_hours(uid) { t.qh_now_in } else { t.qh_now_out };
+            let status = if db.is_in_notification_window(uid) { t.qh_now_in } else { t.qh_now_out };
             format!(
                 "{}\n\n{}: {}",
                 t.quiet_title.replace("{start}", &start).replace("{end}", &end).replace("{tz}", &tz),

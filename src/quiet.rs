@@ -36,19 +36,23 @@ pub fn parse_utc_offset(s: &str) -> Option<i32> {
     Some(sign * (h * 60 + m))
 }
 
-/// Проверяет, попадает ли текущий момент времени в интервал тихого часа.
-/// Интервал задаётся в минутах от полуночи в часовом поясе пользователя (`tz_offset` в минутах).
-/// Если `start_min == end_min`, тихий час выключен.
-/// Поддерживает переход через полночь: например, 23:00–07:00 работает как «с 23:00 до 23:59 и с 00:00 до 07:00».
-pub fn is_in_quiet_hours(now_ts: i64, tz_offset_min: i32, start_min: i32, end_min: i32) -> bool {
+/// Проверяет, попадает ли текущий момент времени в активное окно уведомлений
+/// `[start_min, end_min)` (в минутах от полуночи в часовом поясе пользователя,
+/// `tz_offset` в минутах).
+///
+/// - `start_min == end_min` — фича выключена, уведомления работают в любое время
+///   (`true`).
+/// - Иначе: `true`, когда `local_min` лежит в `[start, end)`.
+/// - Поддерживает переход через полночь: например, 23:00–07:00 означает
+///   «с 23:00 до 23:59 и с 00:00 до 07:00».
+pub fn is_in_notification_window(now_ts: i64, tz_offset_min: i32, start_min: i32, end_min: i32) -> bool {
     if start_min == end_min {
-        return false;
+        return true;
     }
     let local_min = local_minutes_of_day(now_ts, tz_offset_min);
     if start_min < end_min {
         local_min >= start_min && local_min < end_min
     } else {
-        // переход через полночь
         local_min >= start_min || local_min < end_min
     }
 }
@@ -108,52 +112,53 @@ mod tests {
     // неправильное значение, соответствующее 19:46 UTC.
 
     #[test]
-    fn quiet_hours_disabled_when_equal() {
-        assert!(!is_in_quiet_hours(T_2024_01_15_22_00_UTC, 0, 0, 0));
-        assert!(!is_in_quiet_hours(T_2024_01_15_22_00_UTC, 0, 60, 60));
+    fn notification_window_disabled_when_equal() {
+        // start == end → фича выключена → уведомления работают в любое время.
+        assert!(is_in_notification_window(T_2024_01_15_22_00_UTC, 0, 0, 0));
+        assert!(is_in_notification_window(T_2024_01_15_22_00_UTC, 0, 60, 60));
     }
 
     #[test]
-    fn quiet_hours_within_day() {
-        // 09:00–18:00 UTC, сейчас 12:00 UTC → внутри.
-        assert!(is_in_quiet_hours(T_2024_01_15_12_00_UTC, 0, 9 * 60, 18 * 60));
-        // Сейчас 22:00 UTC → снаружи.
-        assert!(!is_in_quiet_hours(T_2024_01_15_22_00_UTC, 0, 9 * 60, 18 * 60));
+    fn notification_window_within_day() {
+        // 09:00–18:00 UTC, сейчас 12:00 UTC → внутри окна.
+        assert!(is_in_notification_window(T_2024_01_15_12_00_UTC, 0, 9 * 60, 18 * 60));
+        // Сейчас 22:00 UTC → снаружи окна.
+        assert!(!is_in_notification_window(T_2024_01_15_22_00_UTC, 0, 9 * 60, 18 * 60));
     }
 
     #[test]
-    fn quiet_hours_cross_midnight() {
+    fn notification_window_cross_midnight() {
         // 23:00–07:00 UTC, сейчас 22:00 → снаружи.
-        assert!(!is_in_quiet_hours(T_2024_01_15_22_00_UTC, 0, 23 * 60, 7 * 60));
+        assert!(!is_in_notification_window(T_2024_01_15_22_00_UTC, 0, 23 * 60, 7 * 60));
         // А теперь 02:00 UTC → внутри.
         let t = T_2024_01_15_22_00_UTC + 4 * 3600;
-        assert!(is_in_quiet_hours(t, 0, 23 * 60, 7 * 60));
+        assert!(is_in_notification_window(t, 0, 23 * 60, 7 * 60));
         // А теперь 08:00 UTC → снаружи.
         let t = T_2024_01_15_22_00_UTC + 10 * 3600;
-        assert!(!is_in_quiet_hours(t, 0, 23 * 60, 7 * 60));
+        assert!(!is_in_notification_window(t, 0, 23 * 60, 7 * 60));
         // Ровно 23:00 UTC → внутри (начало включается).
-        assert!(is_in_quiet_hours(T_2024_01_15_22_00_UTC + 3600, 0, 23 * 60, 7 * 60));
+        assert!(is_in_notification_window(T_2024_01_15_22_00_UTC + 3600, 0, 23 * 60, 7 * 60));
         // Ровно 07:00 UTC → снаружи (конец не включается).
-        assert!(!is_in_quiet_hours(T_2024_01_15_22_00_UTC + 9 * 3600, 0, 23 * 60, 7 * 60));
+        assert!(!is_in_notification_window(T_2024_01_15_22_00_UTC + 9 * 3600, 0, 23 * 60, 7 * 60));
     }
 
     #[test]
-    fn quiet_hours_with_timezone_offset() {
-        // Тихий час 23:00–07:00 Europe/Moscow (UTC+3).
+    fn notification_window_with_timezone_offset() {
+        // Окно 23:00–07:00 Europe/Moscow (UTC+3).
         // Сейчас 22:00 UTC = 01:00 MSK → внутри.
-        assert!(is_in_quiet_hours(T_2024_01_15_22_00_UTC, 180, 23 * 60, 7 * 60));
+        assert!(is_in_notification_window(T_2024_01_15_22_00_UTC, 180, 23 * 60, 7 * 60));
         // А вот 17:00 UTC = 20:00 MSK → снаружи.
         let t = T_2024_01_15_22_00_UTC - 5 * 3600;
-        assert!(!is_in_quiet_hours(t, 180, 23 * 60, 7 * 60));
+        assert!(!is_in_notification_window(t, 180, 23 * 60, 7 * 60));
     }
 
     #[test]
-    fn quiet_hours_with_negative_offset() {
-        // Тихий час 22:00–06:00 America/New_York (UTC-5).
+    fn notification_window_with_negative_offset() {
+        // Окно 22:00–06:00 America/New_York (UTC-5).
         // Сейчас 03:00 UTC = 22:00 NY (предыдущего дня) → внутри.
-        assert!(is_in_quiet_hours(T_2024_01_15_22_00_UTC + 5 * 3600, -300, 22 * 60, 6 * 60));
+        assert!(is_in_notification_window(T_2024_01_15_22_00_UTC + 5 * 3600, -300, 22 * 60, 6 * 60));
         // Сейчас 12:00 UTC = 07:00 NY → снаружи.
-        assert!(!is_in_quiet_hours(T_2024_01_15_22_00_UTC + 14 * 3600, -300, 22 * 60, 6 * 60));
+        assert!(!is_in_notification_window(T_2024_01_15_22_00_UTC + 14 * 3600, -300, 22 * 60, 6 * 60));
     }
 
     #[test]
@@ -195,21 +200,21 @@ mod tests {
         let _ = local_minutes_of_day(far_future, -12 * 60);
     }
 
-    #[test]
-    fn is_in_quiet_hours_no_server_tz_dependency() {
+#[test]
+    fn is_in_notification_window_no_server_tz_dependency() {
         // Проверяем что результат детерминирован и не зависит от того,
         // где запущен код (UTC сервер или локальная TZ). Логика
-        // is_in_quiet_hours получает now_ts явно, поэтому здесь просто
+        // is_in_notification_window получает now_ts явно, поэтому здесь просто
         // проверяем что разные «текущие» таймстампы дают ожидаемые результаты
-        // для пользователя с UTC+3 и интервала 23:00–07:00.
+        // для пользователя с UTC+3 и окна 23:00–07:00.
 
-        // За час до тихого часа (22:00 MSK = 19:00 UTC) → снаружи
-        assert!(!is_in_quiet_hours(19 * 3600, 180, 23 * 60, 7 * 60));
-        // В начале тихого часа (23:00 MSK = 20:00 UTC) → внутри
-        assert!(is_in_quiet_hours(20 * 3600, 180, 23 * 60, 7 * 60));
-        // В конце тихого часа (06:59 MSK = 03:59 UTC) → внутри
-        assert!(is_in_quiet_hours(3 * 3600 + 59 * 60, 180, 23 * 60, 7 * 60));
+        // За час до окна (22:00 MSK = 19:00 UTC) → снаружи
+        assert!(!is_in_notification_window(19 * 3600, 180, 23 * 60, 7 * 60));
+        // В начале окна (23:00 MSK = 20:00 UTC) → внутри
+        assert!(is_in_notification_window(20 * 3600, 180, 23 * 60, 7 * 60));
+        // В конце окна (06:59 MSK = 03:59 UTC) → внутри
+        assert!(is_in_notification_window(3 * 3600 + 59 * 60, 180, 23 * 60, 7 * 60));
         // Сразу после конца (07:00 MSK = 04:00 UTC) → снаружи
-        assert!(!is_in_quiet_hours(4 * 3600, 180, 23 * 60, 7 * 60));
+        assert!(!is_in_notification_window(4 * 3600, 180, 23 * 60, 7 * 60));
     }
 }

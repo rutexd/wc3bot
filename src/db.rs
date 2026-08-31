@@ -316,12 +316,13 @@ impl Db {
         );
     }
 
-    /// True, если прямо сейчас для пользователя активен тихий час.
-    pub fn is_in_quiet_hours(&self, chat_id: i64) -> bool {
+    /// True, если прямо сейчас для пользователя активно окно уведомлений
+    /// (либо окно не настроено).
+    pub fn is_in_notification_window(&self, chat_id: i64) -> bool {
         let Some(qh) = self.get_quiet_hours(chat_id) else {
-            return false;
+            return true;
         };
-        crate::quiet::is_in_quiet_hours(now_ts(), qh.tz_offset_min, qh.start_min, qh.end_min)
+        crate::quiet::is_in_notification_window(now_ts(), qh.tz_offset_min, qh.start_min, qh.end_min)
     }
 
     pub fn get_host_filter(&self, sub_id: i64) -> (String, Vec<String>) {
@@ -1796,15 +1797,16 @@ mod tests {
     // ===================== quiet hours tests =====================
 
     #[test]
-    fn quiet_hours_default_none() {
+    fn notification_window_default_none() {
         let db = memory_db();
         db.ensure_user(1);
         assert!(db.get_quiet_hours(1).is_none());
-        assert!(!db.is_in_quiet_hours(1));
+        // без настроенного окна — уведомления работают всегда
+        assert!(db.is_in_notification_window(1));
     }
 
     #[test]
-    fn quiet_hours_set_and_get() {
+    fn notification_window_set_and_get() {
         let db = memory_db();
         db.ensure_user(1);
         db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
@@ -1815,18 +1817,19 @@ mod tests {
     }
 
     #[test]
-    fn quiet_hours_disable_clears() {
+    fn notification_window_disable_clears() {
         let db = memory_db();
         db.ensure_user(1);
         db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
         assert!(db.get_quiet_hours(1).is_some());
         db.disable_quiet_hours(1);
         assert!(db.get_quiet_hours(1).is_none());
-        assert!(!db.is_in_quiet_hours(1));
+        // после disable — уведомления снова работают всегда
+        assert!(db.is_in_notification_window(1));
     }
 
     #[test]
-    fn quiet_hours_partial_clear() {
+    fn notification_window_partial_clear() {
         let db = memory_db();
         db.ensure_user(1);
         db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
@@ -1839,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_hours_isolation_between_users() {
+    fn notification_window_isolation_between_users() {
         let db = memory_db();
         db.ensure_user(1);
         db.ensure_user(2);
@@ -1849,44 +1852,43 @@ mod tests {
     }
 
     #[test]
-    fn integration_quiet_hours_blocks_notification() {
+    fn integration_notification_window_zero_interval_allows_all() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        db.set_quiet_hours(1, 0, 0, 0); // 00:00–00:00 = выключено
+        db.set_quiet_hours(1, 0, 0, 0); // 00:00–00:00 = фича выключена
         let g = game(1, "Pudge Wars", "Host", "Game");
         assert_eq!(matching_subs(&db, &g).len(), 1);
     }
 
     /// Подделывает «сейчас» через приватный канал: у DB нет метода set_now,
     /// поэтому интеграционные тесты ниже зависят от системного времени.
-    /// Чтобы тесты были детерминированы, мы зовём `is_in_quiet_hours_for_ts`.
-    /// Здесь мы добавляем тонкую обвязку: у DB появится тест-хелпер, который
-    /// переопределяет таймстамп на время теста.
-    fn quiet_hours_at(db: &Db, uid: i64, ts: i64) -> bool {
+    /// Чтобы тесты были детерминированы, мы зовём `is_in_notification_window`
+    /// напрямую с конкретным таймстампом.
+    fn notification_window_at(db: &Db, uid: i64, ts: i64) -> bool {
         let qh = match db.get_quiet_hours(uid) {
             Some(q) => q,
-            None => return false,
+            None => return true,
         };
-        crate::quiet::is_in_quiet_hours(ts, qh.tz_offset_min, qh.start_min, qh.end_min)
+        crate::quiet::is_in_notification_window(ts, qh.tz_offset_min, qh.start_min, qh.end_min)
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_user_in_utc() {
+    fn integration_notification_window_e2e_user_in_utc() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        // тихий час 09:00–18:00 UTC
+        // окно уведомлений 09:00–18:00 UTC
         db.set_quiet_hours(1, 0, 9 * 60, 18 * 60);
 
-        // 12:00 UTC → внутри
-        assert!(quiet_hours_at(&db, 1, 1_705_320_000));
-        // 22:00 UTC → снаружи
-        assert!(!quiet_hours_at(&db, 1, 1_705_356_000));
+        // 12:00 UTC → внутри окна
+        assert!(notification_window_at(&db, 1, 1_705_320_000));
+        // 22:00 UTC → снаружи окна
+        assert!(!notification_window_at(&db, 1, 1_705_356_000));
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_user_in_msk_cross_midnight() {
+    fn integration_notification_window_e2e_user_in_msk_cross_midnight() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
@@ -1894,37 +1896,37 @@ mod tests {
         db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
 
         // 23:30 MSK = 20:30 UTC → внутри
-        assert!(quiet_hours_at(&db, 1, 20 * 3600 + 30 * 60));
+        assert!(notification_window_at(&db, 1, 20 * 3600 + 30 * 60));
         // 02:00 MSK = 23:00 UTC предыдущего дня → внутри
-        assert!(quiet_hours_at(&db, 1, 23 * 3600));
+        assert!(notification_window_at(&db, 1, 23 * 3600));
         // 03:00 MSK = 00:00 UTC → внутри
-        assert!(quiet_hours_at(&db, 1, 0));
+        assert!(notification_window_at(&db, 1, 0));
         // 07:00 MSK = 04:00 UTC → не внутри (конец не включается)
-        assert!(!quiet_hours_at(&db, 1, 4 * 3600));
+        assert!(!notification_window_at(&db, 1, 4 * 3600));
         // 08:00 MSK = 05:00 UTC → снаружи
-        assert!(!quiet_hours_at(&db, 1, 5 * 3600));
+        assert!(!notification_window_at(&db, 1, 5 * 3600));
         // 22:00 MSK = 19:00 UTC → снаружи
-        assert!(!quiet_hours_at(&db, 1, 19 * 3600));
+        assert!(!notification_window_at(&db, 1, 19 * 3600));
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_user_in_la_negative_offset() {
+    fn integration_notification_window_e2e_user_in_la_negative_offset() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
-        // 22:00–06:00 LA = UTC-8 зимой, UTC-7 летом; для теста возьмём UTC-7
+        // 22:00–06:00 LA = UTC-7 для теста
         db.set_quiet_hours(1, -420, 22 * 60, 6 * 60);
 
         // 02:00 LA = 09:00 UTC → внутри
-        assert!(quiet_hours_at(&db, 1, 9 * 3600));
-        // 23:00 LA = 06:00 UTC предыдущего дня → внутри (в пределах суток LA это 23:00)
-        assert!(quiet_hours_at(&db, 1, 6 * 3600));
+        assert!(notification_window_at(&db, 1, 9 * 3600));
+        // 23:00 LA = 06:00 UTC предыдущего дня → внутри
+        assert!(notification_window_at(&db, 1, 6 * 3600));
         // 12:00 LA = 19:00 UTC → снаружи
-        assert!(!quiet_hours_at(&db, 1, 19 * 3600));
+        assert!(!notification_window_at(&db, 1, 19 * 3600));
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_partial_timezone_fractional() {
+    fn integration_notification_window_e2e_partial_timezone_fractional() {
         let db = memory_db();
         db.ensure_user(1);
         let _ = db.add_sub(1, KIND_MAP, "Pudge");
@@ -1932,37 +1934,38 @@ mod tests {
         db.set_quiet_hours(1, 5 * 60 + 30, 22 * 60, 6 * 60);
 
         // 02:00 IST = 20:30 UTC предыдущего дня → внутри
-        assert!(quiet_hours_at(&db, 1, 20 * 3600 + 30 * 60));
+        assert!(notification_window_at(&db, 1, 20 * 3600 + 30 * 60));
         // 23:00 IST = 17:30 UTC → внутри
-        assert!(quiet_hours_at(&db, 1, 17 * 3600 + 30 * 60));
+        assert!(notification_window_at(&db, 1, 17 * 3600 + 30 * 60));
         // 07:00 IST = 01:30 UTC → снаружи (после 06:00)
-        assert!(!quiet_hours_at(&db, 1, 1 * 3600 + 30 * 60));
+        assert!(!notification_window_at(&db, 1, 1 * 3600 + 30 * 60));
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_disabled_via_zero_interval() {
+    fn integration_notification_window_e2e_disabled_via_zero_interval() {
         let db = memory_db();
         db.ensure_user(1);
         db.set_quiet_hours(1, 180, 0, 0);
-        // любой таймстамп → снаружи
-        assert!(!quiet_hours_at(&db, 1, 0));
-        assert!(!quiet_hours_at(&db, 1, 12 * 3600));
-        assert!(!quiet_hours_at(&db, 1, 1_705_356_000));
+        // start == end → фича выключена → окно = всё время → всегда true
+        assert!(notification_window_at(&db, 1, 0));
+        assert!(notification_window_at(&db, 1, 12 * 3600));
+        assert!(notification_window_at(&db, 1, 1_705_356_000));
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_disable_clears_at_any_time() {
+    fn integration_notification_window_e2e_disable_clears_at_any_time() {
         let db = memory_db();
         db.ensure_user(1);
         db.set_quiet_hours(1, 180, 0, 24 * 60 - 1);
         // что-то в течение суток → внутри
-        assert!(quiet_hours_at(&db, 1, 12 * 3600));
+        assert!(notification_window_at(&db, 1, 12 * 3600));
         db.disable_quiet_hours(1);
-        assert!(!quiet_hours_at(&db, 1, 12 * 3600));
+        // после disable — окно не настроено → всегда true
+        assert!(notification_window_at(&db, 1, 12 * 3600));
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_survives_reopen() {
+    fn integration_notification_window_e2e_survives_reopen() {
         let (db, path) = temp_db();
         db.ensure_user(1);
         db.set_quiet_hours(1, 180, 23 * 60, 7 * 60);
@@ -1979,16 +1982,16 @@ mod tests {
     }
 
     #[test]
-    fn integration_quiet_hours_e2e_independent_per_user() {
+    fn integration_notification_window_e2e_independent_per_user() {
         let db = memory_db();
         db.ensure_user(1);
         db.ensure_user(2);
-        db.set_quiet_hours(1, 180, 0, 0); // выключено
+        db.set_quiet_hours(1, 180, 0, 0); // фича выключена
         db.set_quiet_hours(2, 0, 0, 24 * 60); // весь день
         // 12:00 UTC
         let ts = 12 * 3600;
-        assert!(!quiet_hours_at(&db, 1, ts));
-        assert!(quiet_hours_at(&db, 2, ts));
+        assert!(notification_window_at(&db, 1, ts));
+        assert!(notification_window_at(&db, 2, ts));
     }
 
     #[test]
