@@ -9,4 +9,5 @@ config.toml
 .vscode
 data
 .env
-wc3bot.db
+*.db
+AGENTS.md

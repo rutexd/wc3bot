@@ -97,6 +97,33 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
     InlineKeyboardMarkup::new(rows)
 }
 
+/// Краткий индикатор мьюта для строки подписки: «🔕 осталось 4ч 23м» / «🔕 отключено» / None.
+fn mute_indicator(m: &db::MapMute, t: &'static T) -> Option<String> {
+    match m.until {
+        None => Some(format!("🔕 {}", t.st_forever)),
+        Some(until) => {
+            let secs = (until - crate::db::now_ts()).max(0);
+            Some(format!(
+                "🔕 {}{} {}{} {}",
+                secs / 3600,
+                t.st_h,
+                (secs % 3600) / 60,
+                t.st_m,
+                t.st_remaining,
+            ))
+        }
+    }
+}
+
+/// Найти мьют для конкретной подписки `(kind, pattern)` у пользователя.
+fn find_mute(state: &AppState, uid: i64, kind: &str, pattern: &str) -> Option<db::MapMute> {
+    state
+        .db
+        .list_map_mutes(uid)
+        .into_iter()
+        .find(|m| m.kind == kind && m.pattern == pattern)
+}
+
 fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
     let lang = db.lang(uid);
     let notif = if db.notifications_enabled(uid) {
@@ -105,6 +132,12 @@ fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
         t.st_disabled
     };
     let subs = db.list_subs(uid);
+    let mutes = db.list_map_mutes(uid);
+    // (kind, pattern) → mute для быстрого поиска в списке подписок.
+    let mute_by_key: std::collections::HashMap<(&str, &str), &db::MapMute> = mutes
+        .iter()
+        .map(|m| ((m.kind.as_str(), m.pattern.as_str()), m))
+        .collect();
 
     let mut text = format!(
         "{}\n\n{}: {}",
@@ -112,22 +145,6 @@ fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
         t.st_notifications,
         notif,
     );
-
-    let mutes = db.list_map_mutes(uid);
-    if !mutes.is_empty() {
-        text.push_str(&format!("\n\n{}:", t.st_muted_hdr));
-        let now = crate::db::now_ts();
-        for m in &mutes {
-            let dur = match m.until {
-                None => t.st_forever.to_string(),
-                Some(until) => {
-                    let secs = (until - now).max(0);
-                    format!("{}{} {}{} {}", secs / 3600, t.st_h, (secs % 3600) / 60, t.st_m, t.st_remaining)
-                }
-            };
-            text.push_str(&format!("\n• {} {} — {}", kind_label(&m.kind, t), m.pattern, dur));
-        }
-    }
 
     text.push_str(&format!("\n\n{}:", t.st_quiet_hdr));
     match db.get_quiet_hours(uid) {
@@ -146,7 +163,13 @@ fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
     } else {
         for s in &subs {
             let icon = if s.enabled { "✅" } else { "❌" };
-            text.push_str(&format!("{} {} {}\n", icon, kind_label(&s.kind, t), s.pattern));
+            let mute = mute_by_key
+                .get(&(s.kind.as_str(), s.pattern.as_str()))
+                .and_then(|m| mute_indicator(m, t));
+            match mute {
+                Some(ind) => text.push_str(&format!("{} {} {} — {}\n", icon, kind_label(&s.kind, t), s.pattern, ind)),
+                None => text.push_str(&format!("{} {} {}\n", icon, kind_label(&s.kind, t), s.pattern)),
+            }
         }
         text.push_str(t.manage_hint);
     }
@@ -190,15 +213,19 @@ fn kind_to_pending(kind: &str) -> Pending {
     }
 }
 
-fn sub_view(s: &db::Sub, t: &'static T) -> (String, InlineKeyboardMarkup) {
+fn sub_view(s: &db::Sub, mute: Option<&db::MapMute>, t: &'static T) -> (String, InlineKeyboardMarkup) {
     let status = if s.enabled { t.sub_enabled } else { t.sub_disabled };
     let desc = match s.kind.as_str() {
         db::KIND_HOST => t.sub_desc_host,
         db::KIND_NAME => t.sub_desc_name,
         _ => t.sub_desc_map,
     };
+    let mute_line = match mute.and_then(|m| mute_indicator(m, t)) {
+        Some(ind) => format!("\n\n{}", ind),
+        None => String::new(),
+    };
     let text = format!(
-        "{}\n\n{}: {}\n{}: {}\n{}: {}\n\n{}",
+        "{}\n\n{}: {}\n{}: {}\n{}: {}\n\n{}{}",
         t.sub_id.replace("{id}", &s.id.to_string()),
         t.sub_name,
         s.pattern,
@@ -207,6 +234,7 @@ fn sub_view(s: &db::Sub, t: &'static T) -> (String, InlineKeyboardMarkup) {
         t.sub_status,
         status,
         desc,
+        mute_line,
     );
     let toggle_label = if s.enabled { t.btn_disable } else { t.btn_enable };
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
@@ -539,7 +567,8 @@ pub fn handle_message(
                 } else if state.db.rename_sub(id, &new_name).is_ok() {
                     state.clear_pending(uid);
                     if let Some(s) = state.db.get_sub(id) {
-                        let (text, kb) = sub_view(&s, t);
+                        let mute = find_mute(&state, uid, &s.kind, &s.pattern);
+                        let (text, kb) = sub_view(&s, mute.as_ref(), t);
                         show(bot, chat_id, None, text, kb).await?;
                     }
                 } else {
@@ -854,13 +883,21 @@ async fn route_callback(
                     }
                 }
                 "map" | "hback" => {
-                    let (text, kb) = sub_view(&sub, t);
+                    let mute = find_mute(&state, uid, &sub.kind, &sub.pattern);
+                    let (text, kb) = sub_view(&sub, mute.as_ref(), t);
                     show(bot, chat_id, mid, text, kb).await?;
                 }
                 "toggle" => {
-                    state.db.set_sub_enabled(cb.id, !sub.enabled);
+                    let enabling = !sub.enabled;
+                    state.db.set_sub_enabled(cb.id, enabling);
+                    // При включении подписки автоматически снимаем мьют:
+                    // пользователь явно хочет получать уведомления.
+                    if enabling {
+                        state.db.delete_map_mute(uid, &sub.kind, &sub.pattern);
+                    }
                     let sub = state.db.get_sub(cb.id).unwrap();
-                    let (text, kb) = sub_view(&sub, t);
+                    let mute = find_mute(&state, uid, &sub.kind, &sub.pattern);
+                    let (text, kb) = sub_view(&sub, mute.as_ref(), t);
                     show(bot, chat_id, mid, text, kb).await?;
                 }
                 "rename" => {

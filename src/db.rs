@@ -932,6 +932,46 @@ mod tests {
         assert!(!db.set_sub_enabled(999, true));
     }
 
+    /// Семантика «Enable снимает мьют»: реализована в handlers.rs::route_callback
+    /// как последовательность `set_sub_enabled(true) + delete_map_mute(...)`.
+    /// Здесь проверяем что обе операции работают вместе.
+    #[test]
+    fn enable_sub_clears_its_mute() {
+        let db = memory_db();
+        let uid = 1;
+        db.ensure_user(uid);
+        let _ = db.add_sub(uid, KIND_MAP, "Pudge");
+        let sub = db.list_subs(uid).into_iter().next().unwrap();
+
+        db.mute_sub(uid, KIND_MAP, "Pudge");
+        assert!(db.is_sub_muted(uid, KIND_MAP, "Pudge"));
+
+        // имитируем нажатие Enable: выключаем подписку, потом включаем со снятием мьюта
+        assert!(db.set_sub_enabled(sub.id, false));
+        assert!(db.set_sub_enabled(sub.id, true));
+        db.delete_map_mute(uid, &sub.kind, &sub.pattern);
+
+        assert!(!db.is_sub_muted(uid, KIND_MAP, "Pudge"));
+        assert!(db.get_sub(sub.id).unwrap().enabled);
+    }
+
+    /// Disable НЕ должен трогать мьют — пользователь мог мьютить навсегда,
+    /// а потом временно выключить подписку; мьют остаётся.
+    #[test]
+    fn disable_sub_does_not_clear_its_mute() {
+        let db = memory_db();
+        let uid = 1;
+        db.ensure_user(uid);
+        let _ = db.add_sub(uid, KIND_MAP, "Pudge");
+        let sub = db.list_subs(uid).into_iter().next().unwrap();
+
+        db.mute_sub(uid, KIND_MAP, "Pudge");
+        assert!(db.set_sub_enabled(sub.id, false));
+
+        // мьют остаётся
+        assert!(db.is_sub_muted(uid, KIND_MAP, "Pudge"));
+    }
+
     #[test]
     fn rename_sub() {
         let db = memory_db();
