@@ -199,6 +199,7 @@ fn manage_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMarkup 
     rows.extend(add_buttons_kb(t));
     rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
     rows.push(vec![btn(t.btn_lang, "lang")]);
+    rows.push(vec![btn(t.btn_menu, "menu")]);
     InlineKeyboardMarkup::new(rows)
 }
 
