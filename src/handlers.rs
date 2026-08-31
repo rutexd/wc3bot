@@ -93,7 +93,6 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
     ];
     rows.extend(add_buttons_kb(t));
     rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
-    rows.push(vec![btn(t.btn_lang, "lang")]);
     InlineKeyboardMarkup::new(rows)
 }
 
@@ -190,8 +189,7 @@ fn manage_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMarkup 
         )]);
     }
     rows.extend(add_buttons_kb(t));
-    rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
-    rows.push(vec![btn(t.btn_lang, "lang")]);
+    rows.push(vec![btn(notif_label, "notif")]);
     rows.push(vec![btn(t.btn_menu, "menu")]);
     InlineKeyboardMarkup::new(rows)
 }
@@ -318,6 +316,7 @@ fn settings_text(t: &'static T) -> String {
 fn settings_kb(t: &'static T) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![btn(t.btn_quiet, "quiet")],
+        vec![btn(t.btn_lang, "lang")],
         vec![btn(t.btn_menu, "menu")],
     ])
 }
@@ -723,9 +722,10 @@ pub fn handle_callback(
             "lang" => {
                 let new_lang = state.db.lang(uid).toggled();
                 state.db.set_lang(uid, new_lang.code());
-                // fall through to menu redraw below with the new language
                 let t = tr(new_lang);
-                show_pinned(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t), state.bot_id).await?;
+                // Переключение языка теперь живёт в Settings — показываем
+                // экран Settings, чтобы пользователь остался в том же разделе.
+                show_pinned(bot, chat_id, mid, settings_text(t).into(), settings_kb(t), state.bot_id).await?;
             }
             _ => {
                 let lang = state.db.lang(uid);
