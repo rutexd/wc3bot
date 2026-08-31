@@ -276,7 +276,7 @@ const EN: T = T {
 };
 
 const RU: T = T {
-    btn_manage: "📊 Статус и Управление",
+    btn_manage: "📊 Статус и управление",
     btn_add_map: "➕ Карта",
     btn_add_host: "➕ 👤 Хост",
     btn_add_name: "➕ 📛 Название",
