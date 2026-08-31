@@ -44,8 +44,7 @@ impl Lang {
 
 pub struct T {
     // Buttons
-    pub btn_maps: &'static str,
-    pub btn_status: &'static str,
+    pub btn_manage: &'static str,
     pub btn_add_map: &'static str,
     pub btn_add_host: &'static str,
     pub btn_add_name: &'static str,
@@ -57,9 +56,8 @@ pub struct T {
     pub btn_disable: &'static str,
     pub btn_rename: &'static str,
     pub btn_delete: &'static str,
-    pub btn_to_list: &'static str,
+    pub btn_to_manage: &'static str,
     pub btn_menu: &'static str,
-    pub btn_main_menu: &'static str,
     pub btn_cancel: &'static str,
     pub btn_done: &'static str,
     // Welcome / status
@@ -77,10 +75,11 @@ pub struct T {
     pub st_remaining: &'static str,
     pub st_h: &'static str,
     pub st_m: &'static str,
-    // Maps list
-    pub maps_title: &'static str, // {n}
-    pub maps_hint: &'static str,
-    pub maps_empty: &'static str,
+    // Manage screen
+    pub manage_title: &'static str, // {n}
+    pub manage_hint: &'static str,
+    pub manage_empty: &'static str,
+    pub manage_subs_hdr: &'static str,
     // Subscription view
     pub sub_id: &'static str, // {id}
     pub sub_name: &'static str,
@@ -164,8 +163,7 @@ pub struct T {
 }
 
 const EN: T = T {
-    btn_maps: "🗺 My maps",
-    btn_status: "📊 Status",
+    btn_manage: "📊 View & Manage",
     btn_add_map: "➕ Map",
     btn_add_host: "➕ 👤 Host",
     btn_add_name: "➕ 📛 Name",
@@ -177,9 +175,8 @@ const EN: T = T {
     btn_disable: "❌ Disable",
     btn_rename: "✏️ Rename",
     btn_delete: "🗑 Delete",
-    btn_to_list: "⬅️ Back to list",
-    btn_menu: "🏠 Menu",
-    btn_main_menu: "🏠 Main menu",
+    btn_to_manage: "⬅️ Back",
+    btn_menu: "🏠 Main menu",
     btn_cancel: "↩️ Cancel",
     btn_done: "✅ Done",
     welcome: "👋 Hi! I watch WarCraft 3 lobbies on wc3stats.\n\n\
@@ -199,9 +196,10 @@ const EN: T = T {
     st_remaining: "left",
     st_h: "h",
     st_m: "m",
-    maps_title: "🗺 My subscriptions ({n}):",
-    maps_hint: "\n\nTap a subscription to configure it.",
-    maps_empty: "🗺 You have no subscriptions yet.\n\nAdd a map or a host using the buttons below.",
+    manage_title: "📊 Status & Management ({n}):",
+    manage_hint: "\n\nTap a subscription below to configure it.",
+    manage_empty: "No subscriptions yet — add one with the buttons above.",
+    manage_subs_hdr: "Your subscriptions",
     sub_id: "Subscription #{id}",
     sub_name: "Name",
     sub_type: "Type",
@@ -278,8 +276,7 @@ const EN: T = T {
 };
 
 const RU: T = T {
-    btn_maps: "🗺 Мои карты",
-    btn_status: "📊 Статус",
+    btn_manage: "📊 Статус и Управление",
     btn_add_map: "➕ Карта",
     btn_add_host: "➕ 👤 Хост",
     btn_add_name: "➕ 📛 Название",
@@ -291,9 +288,8 @@ const RU: T = T {
     btn_disable: "❌ Выключить",
     btn_rename: "✏️ Переименовать",
     btn_delete: "🗑 Удалить",
-    btn_to_list: "⬅️ К списку",
-    btn_menu: "🏠 Меню",
-    btn_main_menu: "🏠 Главное меню",
+    btn_to_manage: "⬅️ Назад",
+    btn_menu: "🏠 Главное меню",
     btn_cancel: "↩️ Отмена",
     btn_done: "✅ Готово",
     welcome: "👋 Привет! Я слежу за игровыми лобби WarCraft 3 на wc3stats.\n\n\
@@ -314,9 +310,10 @@ const RU: T = T {
     st_remaining: "осталось",
     st_h: "ч",
     st_m: "мин",
-    maps_title: "🗺 Мои подписки ({n}):",
-    maps_hint: "\n\nНажми на подписку, чтобы настроить её.",
-    maps_empty: "🗺 У тебя пока нет подписок.\n\nДобавь карту или хоста через кнопки ниже.",
+    manage_title: "📊 Статус и Управление ({n}):",
+    manage_hint: "\n\nНажми на подписку ниже, чтобы настроить её.",
+    manage_empty: "Подписок пока нет — добавь одну кнопками выше.",
+    manage_subs_hdr: "Твои подписки",
     sub_id: "Подписка #{id}",
     sub_name: "Название",
     sub_type: "Тип",

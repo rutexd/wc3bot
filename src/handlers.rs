@@ -89,7 +89,7 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
         t.btn_notif_off
     };
     let mut rows = vec![
-        vec![btn(t.btn_maps, "maps"), btn(t.btn_status, "status")],
+        vec![btn(t.btn_manage, "manage")],
     ];
     rows.extend(add_buttons_kb(t));
     rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
@@ -97,7 +97,7 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
     InlineKeyboardMarkup::new(rows)
 }
 
-fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
+fn status_body(db: &Db, uid: i64, t: &'static T) -> String {
     let lang = db.lang(uid);
     let notif = if db.notifications_enabled(uid) {
         t.st_enabled
@@ -164,6 +164,44 @@ fn status_text(db: &Db, uid: i64, t: &'static T) -> String {
     text
 }
 
+/// Combined View & Manage screen: status body + interactive sub buttons.
+fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
+    let subs = db.list_subs(uid);
+    let mut text = status_body(db, uid, t);
+    text.push_str(&format!("\n\n{}", t.manage_title.replace("{n}", &subs.len().to_string())));
+    if subs.is_empty() {
+        text.push_str(&format!("\n{}", t.manage_empty));
+    } else {
+        text.push_str(&format!("\n{}\n", t.manage_subs_hdr));
+        for s in &subs {
+            let icon = if s.enabled { "✅" } else { "❌" };
+            text.push_str(&format!("\n• {} {} {}", icon, kind_label(&s.kind, t), s.pattern));
+        }
+        text.push_str(t.manage_hint);
+    }
+    text
+}
+
+fn manage_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMarkup {
+    let subs = state.db.list_subs(uid);
+    let notif_label = if state.db.notifications_enabled(uid) {
+        t.btn_notif_on
+    } else {
+        t.btn_notif_off
+    };
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    for s in &subs {
+        rows.push(vec![btn(
+            &format!("{} {}", kind_label(&s.kind, t), s.pattern),
+            &format!("map:{}", s.id),
+        )]);
+    }
+    rows.extend(add_buttons_kb(t));
+    rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
+    rows.push(vec![btn(t.btn_lang, "lang")]);
+    InlineKeyboardMarkup::new(rows)
+}
+
 fn kind_label(kind: &str, t: &'static T) -> &'static str {
     match kind {
         db::KIND_HOST => t.kind_host,
@@ -178,35 +216,6 @@ fn kind_to_pending(kind: &str) -> Pending {
         db::KIND_NAME => Pending::AddName,
         _ => Pending::AddMap,
     }
-}
-
-fn maps_text(state: &AppState, uid: i64, t: &'static T) -> String {
-    let subs = state.db.list_subs(uid);
-    if subs.is_empty() {
-        return t.maps_empty.into();
-    }
-    let mut text = t.maps_title.replace("{n}", &subs.len().to_string());
-    text.push_str(t.maps_hint);
-    for s in &subs {
-        let icon = if s.enabled { "✅" } else { "❌" };
-        text.push_str(&format!("\n{} {} {}", icon, kind_label(&s.kind, t), s.pattern));
-    }
-    text
-}
-
-fn maps_kb(subs: &[db::Sub], t: &'static T) -> InlineKeyboardMarkup {
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = subs
-        .iter()
-        .map(|s| {
-            vec![btn(
-                &format!("{} {}", kind_label(&s.kind, t), s.pattern),
-                &format!("map:{}", s.id),
-            )]
-        })
-        .collect();
-    rows.extend(add_buttons_kb(t));
-    rows.push(vec![btn(t.btn_main_menu, "menu")]);
-    InlineKeyboardMarkup::new(rows)
 }
 
 fn sub_view(s: &db::Sub, t: &'static T) -> (String, InlineKeyboardMarkup) {
@@ -238,7 +247,7 @@ fn sub_view(s: &db::Sub, t: &'static T) -> (String, InlineKeyboardMarkup) {
         mid_row.push(btn(t.btn_hosts, &format!("hosts:{}", s.id)));
     }
     rows.push(mid_row);
-    rows.push(vec![btn(t.btn_to_list, "maps"), btn(t.btn_menu, "menu")]);
+    rows.push(vec![btn(t.btn_to_manage, "manage"), btn(t.btn_menu, "menu")]);
     (text, InlineKeyboardMarkup::new(rows))
 }
 
@@ -286,7 +295,7 @@ fn host_filter_screen(
     }
     kb_rows.push(vec![btn(t.btn_toggle_mode, &format!("hmode:{}", sub.id))]);
     kb_rows.push(vec![btn(t.btn_add_hf_host, &format!("hadd:{}", sub.id))]);
-    kb_rows.push(vec![btn(t.btn_to_list, &format!("hback:{}", sub.id))]);
+    kb_rows.push(vec![btn(t.btn_to_manage, &format!("hback:{}", sub.id))]);
     let kb = InlineKeyboardMarkup::new(kb_rows);
     (text, kb)
 }
@@ -306,7 +315,7 @@ fn settings_text(t: &'static T) -> String {
 fn settings_kb(t: &'static T) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![btn(t.btn_quiet, "quiet")],
-        vec![btn(t.btn_main_menu, "menu")],
+        vec![btn(t.btn_menu, "menu")],
     ])
 }
 
@@ -425,24 +434,13 @@ pub fn handle_message(
                     )
                     .await?;
                 }
-                "/maps" => {
-                    let subs = state.db.list_subs(uid);
-                    show(
-                        bot.clone(),
-                        chat_id,
-                        None,
-                        maps_text(&state, uid, t),
-                        maps_kb(&subs, t),
-                    )
-                    .await?;
-                }
-                "/status" => {
+                "/manage" => {
                     show_pinned(
                         bot.clone(),
                         chat_id,
                         None,
-                        status_text(&state.db, uid, t),
-                        main_menu_kb(&state, uid, t),
+                        manage_text(&state.db, uid, t),
+                        manage_kb(&state, uid, t),
                         state.bot_id,
                     )
                     .await?;
@@ -461,13 +459,13 @@ pub fn handle_message(
                 }
                 "/done" => {
                     state.clear_pending(uid);
-                    let subs = state.db.list_subs(uid);
-                    show(
+                    show_pinned(
                         bot.clone(),
                         chat_id,
                         None,
-                        maps_text(&state, uid, t),
-                        maps_kb(&subs, t),
+                        manage_text(&state.db, uid, t),
+                        manage_kb(&state, uid, t),
+                        state.bot_id,
                     )
                     .await?;
                 }
@@ -725,9 +723,16 @@ async fn route_callback(
         "menu" => {
             show_pinned(bot, chat_id, mid, t.welcome.into(), main_menu_kb(&state, uid, t), state.bot_id).await?;
         }
-        "maps" => {
-            let subs = state.db.list_subs(uid);
-            show(bot, chat_id, mid, maps_text(&state, uid, t), maps_kb(&subs, t)).await?;
+        "manage" => {
+            show_pinned(
+                bot,
+                chat_id,
+                mid,
+                manage_text(&state.db, uid, t),
+                manage_kb(&state, uid, t),
+                state.bot_id,
+            )
+            .await?;
         }
         "settings" => {
             show_pinned(bot, chat_id, mid, settings_text(t), settings_kb(t), state.bot_id).await?;
@@ -744,17 +749,15 @@ async fn route_callback(
             let _ = bot.answer_callback_query(cq_id).text(t.msg_qh_disabled).await;
             show_pinned(bot, chat_id, mid, quiet_screen_text(&state.db, uid, t), quiet_kb(&state.db, uid, t), state.bot_id).await?;
         }
-        "status" | "notif" => {
-            if data == "notif" {
-                let on = !state.db.notifications_enabled(uid);
-                state.db.set_notifications(uid, on);
-            }
+        "notif" => {
+            let on = !state.db.notifications_enabled(uid);
+            state.db.set_notifications(uid, on);
             show_pinned(
                 bot,
                 chat_id,
                 mid,
-                status_text(&state.db, uid, t),
-                main_menu_kb(&state, uid, t),
+                manage_text(&state.db, uid, t),
+                manage_kb(&state, uid, t),
                 state.bot_id,
             )
             .await?;
@@ -790,13 +793,13 @@ async fn route_callback(
         }
         "done" => {
             state.clear_pending(uid);
-            let subs = state.db.list_subs(uid);
-            show(
+            show_pinned(
                 bot,
                 chat_id,
                 mid,
-                maps_text(&state, uid, t),
-                maps_kb(&subs, t),
+                manage_text(&state.db, uid, t),
+                manage_kb(&state, uid, t),
+                state.bot_id,
             )
             .await?;
         }
@@ -898,13 +901,13 @@ async fn route_callback(
                     println!("[del] uid={uid} id={} name={}", cb.id, sub.pattern);
                     state.db.delete_sub(cb.id);
                     state.db.delete_map_mute(uid, &sub.kind, &sub.pattern);
-                    let subs = state.db.list_subs(uid);
-                    show(
+                    show_pinned(
                         bot,
                         chat_id,
                         mid,
                         t.msg_deleted.replace("{name}", &sub.pattern),
-                        maps_kb(&subs, t),
+                        manage_kb(&state, uid, t),
+                        state.bot_id,
                     )
                     .await?;
                 }
