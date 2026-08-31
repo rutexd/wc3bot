@@ -162,11 +162,10 @@ fn manage_text(db: &Db, uid: i64, t: &'static T) -> String {
         text.push_str(&format!("{}\n", t.manage_empty));
     } else {
         for s in &subs {
-            let icon = if s.enabled { "✅" } else { "❌" };
-            let mute = mute_by_key
-                .get(&(s.kind.as_str(), s.pattern.as_str()))
-                .and_then(|m| mute_indicator(m, t));
-            match mute {
+            let mute = mute_by_key.get(&(s.kind.as_str(), s.pattern.as_str()));
+            // Мьют виртуально отключает подписку — показываем ❌ в обоих случаях.
+            let icon = if s.enabled && mute.is_none() { "✅" } else { "❌" };
+            match mute.and_then(|m| mute_indicator(m, t)) {
                 Some(ind) => text.push_str(&format!("{} {} {} — {}\n", icon, kind_label(&s.kind, t), s.pattern, ind)),
                 None => text.push_str(&format!("{} {} {}\n", icon, kind_label(&s.kind, t), s.pattern)),
             }
@@ -214,7 +213,11 @@ fn kind_to_pending(kind: &str) -> Pending {
 }
 
 fn sub_view(s: &db::Sub, mute: Option<&db::MapMute>, t: &'static T) -> (String, InlineKeyboardMarkup) {
-    let status = if s.enabled { t.sub_enabled } else { t.sub_disabled };
+    // Эффективный статус: если есть мьют, считаем подписку «на паузе»
+    // независимо от значения `s.enabled`. Это синхронизирует отображение
+    // с фактическим поведением поллера (он не шлёт уведомления при мьюте).
+    let effectively_disabled = !s.enabled || mute.is_some();
+    let status = if effectively_disabled { t.sub_disabled } else { t.sub_enabled };
     let desc = match s.kind.as_str() {
         db::KIND_HOST => t.sub_desc_host,
         db::KIND_NAME => t.sub_desc_name,
@@ -236,7 +239,7 @@ fn sub_view(s: &db::Sub, mute: Option<&db::MapMute>, t: &'static T) -> (String, 
         desc,
         mute_line,
     );
-    let toggle_label = if s.enabled { t.btn_disable } else { t.btn_enable };
+    let toggle_label = if effectively_disabled { t.btn_enable } else { t.btn_disable };
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
     rows.push(vec![btn(toggle_label, &format!("toggle:{}", s.id))]);
     let mut mid_row = vec![
