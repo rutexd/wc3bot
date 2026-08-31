@@ -972,6 +972,35 @@ mod tests {
         assert!(db.is_sub_muted(uid, KIND_MAP, "Pudge"));
     }
 
+    /// Подписка включена + есть мьют. Toggle должен снять мьют
+    /// (как если бы пользователь нажал «Включить» в sub_view).
+    /// Раньше баг: код смотрел только на `sub.enabled` и пропускал снятие мьюта.
+    #[test]
+    fn toggle_sub_when_enabled_with_mute_clears_mute() {
+        let db = memory_db();
+        let uid = 1;
+        db.ensure_user(uid);
+        let _ = db.add_sub(uid, KIND_MAP, "Pudge");
+        let sub = db.list_subs(uid).into_iter().next().unwrap();
+
+        db.mute_sub(uid, KIND_MAP, "Pudge");
+        assert!(sub.enabled);
+        assert!(db.is_sub_muted(uid, KIND_MAP, "Pudge"));
+
+        // имитируем фикс: «эффективно выключено» (мьют) → enabling=true → снимаем мьют
+        let effectively_disabled = !sub.enabled
+            || db.list_map_mutes(uid).iter().any(|m| m.kind == sub.kind && m.pattern == sub.pattern);
+        assert!(effectively_disabled);
+        let enabling = effectively_disabled;
+        assert!(db.set_sub_enabled(sub.id, enabling));
+        if enabling {
+            db.delete_map_mute(uid, &sub.kind, &sub.pattern);
+        }
+
+        assert!(!db.is_sub_muted(uid, KIND_MAP, "Pudge"));
+        assert!(db.get_sub(sub.id).unwrap().enabled);
+    }
+
     #[test]
     fn rename_sub() {
         let db = memory_db();

@@ -372,6 +372,30 @@ async fn show(
     Ok(Some(m.id))
 }
 
+/// Только редактирует существующее сообщение; новое не отправляет.
+/// Используется для колбэков, где дубль сообщения недопустим (например, toggle).
+async fn edit_only(
+    bot: Bot,
+    chat_id: ChatId,
+    message_id: MessageId,
+    text: String,
+    kb: InlineKeyboardMarkup,
+) -> ResponseResult<()> {
+    // Подавляем «Message is not modified» — это не ошибка для пользователя,
+    // просто текст не изменился.
+    let res = bot
+        .edit_message_text(chat_id, message_id, text)
+        .reply_markup(kb)
+        .await;
+    if let Err(e) = res {
+        let msg = format!("{e}");
+        if !msg.contains("message is not modified") {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
 async fn show_pinned(
     bot: Bot,
     chat_id: ChatId,
@@ -891,9 +915,14 @@ async fn route_callback(
                     show(bot, chat_id, mid, text, kb).await?;
                 }
                 "toggle" => {
-                    let enabling = !sub.enabled;
+                    // Решение принимаем по «эффективному» состоянию (как в sub_view),
+                    // а не по `sub.enabled`. Иначе для подписки с мьютом кнопка
+                    // «Включить» ничего не делала бы — мьют остался бы на месте.
+                    let effectively_disabled = !sub.enabled
+                        || find_mute(&state, uid, &sub.kind, &sub.pattern).is_some();
+                    let enabling = effectively_disabled;
                     state.db.set_sub_enabled(cb.id, enabling);
-                    // При включении подписки автоматически снимаем мьют:
+                    // При включении автоматически снимаем мьют:
                     // пользователь явно хочет получать уведомления.
                     if enabling {
                         state.db.delete_map_mute(uid, &sub.kind, &sub.pattern);
@@ -901,7 +930,14 @@ async fn route_callback(
                     let sub = state.db.get_sub(cb.id).unwrap();
                     let mute = find_mute(&state, uid, &sub.kind, &sub.pattern);
                     let (text, kb) = sub_view(&sub, mute.as_ref(), t);
-                    show(bot, chat_id, mid, text, kb).await?;
+                    // edit_only: редактируем текущее сообщение, но не отправляем
+                    // новое — иначе дубль «Message is not modified» от Telegram
+                    // приводит к появлению второго такого же окна.
+                    if let Some(mid) = mid {
+                        edit_only(bot, chat_id, mid, text, kb).await?;
+                    } else {
+                        let _ = show(bot, chat_id, None, text, kb).await?;
+                    }
                 }
                 "rename" => {
                     state.set_pending(uid, Pending::Rename(cb.id));
