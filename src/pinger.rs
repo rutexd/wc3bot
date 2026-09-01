@@ -1,12 +1,23 @@
 use std::time::Duration;
 
 use crate::api::Game;
+use crate::db::UserSettings;
 use crate::loc::{tr, Lang};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-pub fn notification_kb(lang: Lang, kind: &str, pattern: &str) -> InlineKeyboardMarkup {
+/// Keyboard under a notification message.
+/// 4-я кнопка "👁 Watch" появляется только если:
+/// - у пользователя ещё НЕТ identity, совпадающей с `game.host` при включённом мониторинге
+/// (см. `crate::watcher::should_show_watch_button`).
+pub fn notification_kb(
+    lang: Lang,
+    kind: &str,
+    pattern: &str,
+    game: &Game,
+    user_settings: &UserSettings,
+) -> InlineKeyboardMarkup {
     let t = tr(lang);
-    InlineKeyboardMarkup::new(vec![vec![
+    let mut row = vec![
         InlineKeyboardButton::callback(
             t.btn_snooze.to_string(),
             format!("snooze:{kind}:{pattern}"),
@@ -16,7 +27,14 @@ pub fn notification_kb(lang: Lang, kind: &str, pattern: &str) -> InlineKeyboardM
             format!("mute:{kind}:{pattern}"),
         ),
         InlineKeyboardButton::callback(t.btn_check.to_string(), "check".to_string()),
-    ]])
+    ];
+    if crate::watcher::should_show_watch_button(user_settings, game) {
+        row.push(InlineKeyboardButton::callback(
+            t.btn_monitor_watch.to_string(),
+            format!("watch:{}", game.id),
+        ));
+    }
+    InlineKeyboardMarkup::new(vec![row])
 }
 
 fn format_duration(d: Duration) -> String {

@@ -19,6 +19,18 @@ pub const PMODE_ALERT: i32 = 2;
 pub const ALERT_COUNT_MIN: i32 = 1;
 pub const ALERT_COUNT_MAX: i32 = 5;
 
+/// Per-user settings for monitoring of one's own hosted games.
+#[derive(Debug, Clone)]
+pub struct UserSettings {
+    pub user_id: i64,
+    /// `Some("Name#12345")` if the user has set their identity; `None` otherwise.
+    /// Case-insensitive match against `Game.host`.
+    pub watched_identity: Option<String>,
+    /// Global toggle for nickname-mode. Even with a `watched_identity` set,
+    /// the bot will not monitor anything for this user while this is false.
+    pub monitoring_enabled: bool,
+}
+
 pub const SNOOZE_SECS: i64 = 12 * 60 * 60;
 
 pub fn now_ts() -> i64 {
@@ -371,6 +383,80 @@ impl Db {
              WHERE chat_id = ?1",
             params![chat_id],
         );
+    }
+
+    /// Read per-user monitoring settings. Returns a default `UserSettings`
+    /// (identity=None, monitoring_enabled=false) if the user has no row yet.
+    pub fn get_user_settings(&self, user_id: i64) -> UserSettings {
+        let conn = self.0.lock().unwrap();
+        let row: Option<(Option<String>, i64)> = conn
+            .query_row(
+                "SELECT watched_identity, monitoring_enabled FROM user_settings WHERE user_id = ?1",
+                params![user_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        match row {
+            Some((id, en)) => UserSettings {
+                user_id,
+                watched_identity: id,
+                monitoring_enabled: en != 0,
+            },
+            None => UserSettings {
+                user_id,
+                watched_identity: None,
+                monitoring_enabled: false,
+            },
+        }
+    }
+
+    /// Set the user's watched identity. Caller is expected to validate the
+    /// format (e.g. via `crate::watcher::parse_identity`) beforehand — this
+    /// method stores the value as-is.
+    pub fn set_watched_identity(&self, user_id: i64, identity: &str) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO user_settings(user_id, watched_identity, monitoring_enabled)
+             VALUES (?1, ?2, 0)
+             ON CONFLICT(user_id) DO UPDATE SET
+                watched_identity = excluded.watched_identity",
+            params![user_id, identity],
+        );
+    }
+
+    /// Toggle the global monitoring switch for the user. Identity is preserved.
+    pub fn set_monitoring_enabled(&self, user_id: i64, on: bool) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO user_settings(user_id, watched_identity, monitoring_enabled)
+             VALUES (?1, NULL, ?2)
+             ON CONFLICT(user_id) DO UPDATE SET
+                monitoring_enabled = ?2",
+            params![user_id, on as i64],
+        );
+    }
+
+    /// Load all user_settings rows at once. Used by the poller so it doesn't
+    /// issue a query per user on every tick.
+    pub fn all_user_settings(&self) -> Vec<UserSettings> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = match conn.prepare_cached(
+            "SELECT user_id, watched_identity, monitoring_enabled FROM user_settings",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |row| {
+            Ok(UserSettings {
+                user_id: row.get(0)?,
+                watched_identity: row.get(1)?,
+                monitoring_enabled: row.get::<_, i64>(2)? != 0,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
     }
 
     /// True, если прямо сейчас для пользователя активно окно уведомлений
@@ -2386,5 +2472,128 @@ mod tests {
         let s2 = db.get_sub(s2.id).unwrap();
         assert_eq!(s2.players_mode, PMODE_OFF);
         assert_eq!(s2.min_players, 0);
+    }
+
+    // ===================== user_settings tests =====================
+
+    #[test]
+    fn user_settings_default_for_unknown_user() {
+        let db = memory_db();
+        let s = db.get_user_settings(999);
+        assert_eq!(s.user_id, 999);
+        assert!(s.watched_identity.is_none());
+        assert!(!s.monitoring_enabled);
+    }
+
+    #[test]
+    fn user_settings_set_identity_persists() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_watched_identity(1, "Rutex#2561");
+        let s = db.get_user_settings(1);
+        assert_eq!(s.watched_identity.as_deref(), Some("Rutex#2561"));
+        // new identity resets monitoring_enabled to false (explicitly)
+        assert!(!s.monitoring_enabled);
+    }
+
+    #[test]
+    fn user_settings_set_identity_overwrites_previous() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_watched_identity(1, "Old#1");
+        db.set_monitoring_enabled(1, true);
+        db.set_watched_identity(1, "New#2");
+        let s = db.get_user_settings(1);
+        assert_eq!(s.watched_identity.as_deref(), Some("New#2"));
+        // новый set_watched_identity не сбрасывает мониторинг (только при первом INSERT)
+        assert!(s.monitoring_enabled);
+    }
+
+    #[test]
+    fn user_settings_toggle_monitoring() {
+        let db = memory_db();
+        db.ensure_user(1);
+        assert!(!db.get_user_settings(1).monitoring_enabled);
+
+        db.set_monitoring_enabled(1, true);
+        assert!(db.get_user_settings(1).monitoring_enabled);
+
+        db.set_monitoring_enabled(1, false);
+        assert!(!db.get_user_settings(1).monitoring_enabled);
+    }
+
+    #[test]
+    fn user_settings_toggle_preserves_identity() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.set_watched_identity(1, "Rutex#2561");
+        db.set_monitoring_enabled(1, true);
+        let s = db.get_user_settings(1);
+        assert_eq!(s.watched_identity.as_deref(), Some("Rutex#2561"));
+        assert!(s.monitoring_enabled);
+    }
+
+    #[test]
+    fn user_settings_all_returns_all_rows() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.ensure_user(2);
+        db.ensure_user(3);
+        db.set_watched_identity(1, "A#1");
+        // set_watched_identity не включает мониторинг автоматически
+        // (по дизайну: пользователь сам жмёт «Включить» в monitor-экране)
+        db.set_monitoring_enabled(2, true); // без identity
+        db.set_watched_identity(3, "C#3");
+        db.set_monitoring_enabled(3, true);
+
+        let all = db.all_user_settings();
+        let by_id: std::collections::HashMap<i64, UserSettings> =
+            all.into_iter().map(|s| (s.user_id, s)).collect();
+
+        assert!(by_id.contains_key(&1));
+        assert!(by_id.contains_key(&2));
+        assert!(by_id.contains_key(&3));
+        assert_eq!(by_id[&1].watched_identity.as_deref(), Some("A#1"));
+        assert!(!by_id[&1].monitoring_enabled);
+        assert!(by_id[&2].watched_identity.is_none());
+        assert!(by_id[&2].monitoring_enabled);
+        assert_eq!(by_id[&3].watched_identity.as_deref(), Some("C#3"));
+    }
+
+    #[test]
+    fn user_settings_all_empty_initially() {
+        let db = memory_db();
+        assert!(db.all_user_settings().is_empty());
+    }
+
+    #[test]
+    fn user_settings_survives_reopen() {
+        let (db, path) = temp_db();
+        db.ensure_user(1);
+        db.set_watched_identity(1, "Rutex#2561");
+        db.set_monitoring_enabled(1, true);
+        drop(db);
+
+        let db = Db::open(&path).unwrap();
+        let s = db.get_user_settings(1);
+        assert_eq!(s.watched_identity.as_deref(), Some("Rutex#2561"));
+        assert!(s.monitoring_enabled);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn user_settings_isolation_between_users() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.ensure_user(2);
+        db.set_watched_identity(1, "A#1");
+        db.set_monitoring_enabled(1, true);
+        // user 2 — без настроек
+        let s1 = db.get_user_settings(1);
+        let s2 = db.get_user_settings(2);
+        assert_eq!(s1.watched_identity.as_deref(), Some("A#1"));
+        assert!(s2.watched_identity.is_none());
+        assert!(!s2.monitoring_enabled);
     }
 }

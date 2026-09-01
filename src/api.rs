@@ -4,7 +4,7 @@ use std::time::Duration;
 
 const GAMELIST_URL: &str = "https://api.wc3stats.com/gamelist";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Game {
     pub id: i64,

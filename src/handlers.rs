@@ -1,5 +1,6 @@
 use crate::db::{self, Db};
 use crate::loc::{tr, T};
+use crate::watcher::WatchState;
 use futures::future::BoxFuture;
 use std::{
     collections::HashMap,
@@ -35,6 +36,8 @@ pub enum Pending {
         mode: i32,
         alert_count: i32,
     },
+    /// Ожидаем ввод идентичности Name#12345 для мониторинга своего хоста.
+    MonitorNick,
 }
 
 #[derive(Clone)]
@@ -43,6 +46,7 @@ pub struct AppState {
     pub pending: Arc<Mutex<HashMap<i64, Pending>>>,
     pub bot_id: UserId,
     pub deleted: Arc<Mutex<std::collections::HashSet<(i64, i32)>>>,
+    pub watch_state: Arc<Mutex<WatchState>>,
 }
 
 impl AppState {
@@ -50,12 +54,14 @@ impl AppState {
         db: Arc<Db>,
         bot_id: UserId,
         deleted: Arc<Mutex<std::collections::HashSet<(i64, i32)>>>,
+        watch_state: Arc<Mutex<WatchState>>,
     ) -> Self {
         Self {
             db,
             pending: Arc::new(Mutex::new(HashMap::new())),
             bot_id,
             deleted,
+            watch_state,
         }
     }
 
@@ -100,7 +106,76 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
     ];
     rows.extend(add_buttons_kb(t));
     rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
+    rows.push(vec![btn(t.btn_monitor, "monitor")]);
     InlineKeyboardMarkup::new(rows)
+}
+
+/// Текст и кнопки экрана «Мониторинг».
+fn monitor_screen(state: &AppState, uid: i64, t: &'static T) -> (String, InlineKeyboardMarkup) {
+    let settings = state.db.get_user_settings(uid);
+    let mut text = format!("{}\n\n", t.monitor_title);
+
+    let state_label = if settings.monitoring_enabled {
+        t.monitor_state_on
+    } else {
+        t.monitor_state_off
+    };
+    text.push_str(&format!("{}: {}\n", t.pm_mode, state_label));
+
+    match settings.watched_identity.as_deref() {
+        Some(id) => text.push_str(&t.monitor_current_identity.replace("{id}", id)),
+        None => text.push_str(t.monitor_no_identity),
+    };
+
+    // список активных explicit-слежек
+    let watch_state = state.watch_state.lock().unwrap();
+    if let Some(user_state) = watch_state.users.get(&uid) {
+        if !user_state.explicit_games.is_empty() {
+            text.push_str(&format!("\n\n{}", t.monitor_active_hdr));
+            // собираем map+host из last_taken/last_total не сможем — у нас только id
+            // для полноты покажем только game_id, map/host не знаем без Game
+            // (мы их не храним, чтобы не дублировать API state).
+            // Вместо этого покажем id, чтобы юзер понимал "что-то следится".
+            // TODO в будущем: хранить map+host в explicit_games как RichGame.
+            // Сейчас покажем id, чтобы не молча игнорировать.
+            for (gid, wg) in &user_state.explicit_games {
+                if !wg.map.is_empty() {
+                    text.push_str(&format!(
+                        "\n{}",
+                        t.monitor_active_item
+                            .replace("{map}", &wg.map)
+                            .replace("{host}", &wg.host)
+                            .replace("{taken}", &wg.taken.to_string())
+                            .replace("{total}", &wg.total.to_string())
+                    ));
+                } else {
+                    // No data yet (just registered via "Watch" button, waiting
+                    // for next poller tick to fill in the snapshot).
+                    text.push_str(&format!("\n• game #{gid}"));
+                }
+            }
+        } else {
+            text.push_str(&format!("\n\n{}", t.monitor_active_none));
+        }
+    } else {
+        text.push_str(&format!("\n\n{}", t.monitor_active_none));
+    }
+    drop(watch_state);
+
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    if settings.watched_identity.is_none() {
+        rows.push(vec![btn(t.btn_monitor_set, "mon_set")]);
+    } else {
+        rows.push(vec![btn(t.btn_monitor_change, "mon_set")]);
+        if settings.monitoring_enabled {
+            rows.push(vec![btn(t.btn_monitor_disable, "mon_toggle")]);
+        } else {
+            rows.push(vec![btn(t.btn_monitor_enable, "mon_toggle")]);
+        }
+    }
+    rows.push(vec![btn(t.btn_menu, "menu")]);
+
+    (text, InlineKeyboardMarkup::new(rows))
 }
 
 /// Краткий индикатор мьюта для строки подписки: «🔕 осталось 4ч 23м» / «🔕 отключено» / None.
@@ -759,6 +834,33 @@ pub fn handle_message(
                     }
                 }
             }
+            Some(Pending::MonitorNick) => {
+                let id = trimmed;
+                match crate::watcher::parse_identity(id) {
+                    Ok(_) => {
+                        state.db.set_watched_identity(uid, id);
+                        // Не включаем мониторинг автоматически — пользователь
+                        // сам жмёт «Включить». Просто подтверждаем ник.
+                        let (text, kb) = monitor_screen(&state, uid, t);
+                        state.clear_pending(uid);
+                        let bot2 = bot.clone();
+                        show(bot, chat_id, None, text, kb).await?;
+                        bot2
+                            .send_message(
+                                chat_id,
+                                t.msg_monitor_set.replace("{id}", id),
+                            )
+                            .await?;
+                    }
+                    Err(_) => {
+                        // Остаёмся в pending — даём ещё попытку.
+                        state.set_pending(uid, Pending::MonitorNick);
+                        bot.send_message(chat_id, t.msg_monitor_invalid)
+                            .reply_markup(cancel_kb(t))
+                            .await?;
+                    }
+                }
+            }
             None => {
                 bot.send_message(chat_id, t.msg_use_menu).await?;
             }
@@ -930,6 +1032,58 @@ async fn route_callback(
                 state.bot_id,
             )
             .await?;
+        }
+        "monitor" => {
+            let (text, kb) = monitor_screen(&state, uid, t);
+            show_pinned(bot, chat_id, mid, text, kb, state.bot_id).await?;
+        }
+        "mon_set" => {
+            state.set_pending(uid, Pending::MonitorNick);
+            bot.send_message(chat_id, t.prompt_monitor_nick)
+                .reply_markup(cancel_kb(t))
+                .await?;
+        }
+        "mon_toggle" => {
+            let cur = state.db.get_user_settings(uid).monitoring_enabled;
+            let now = !cur;
+            state.db.set_monitoring_enabled(uid, now);
+            let (text, kb) = monitor_screen(&state, uid, t);
+            let _ = bot
+                .answer_callback_query(cq_id)
+                .text(
+                    t.msg_monitor_toggled.replace(
+                        "{state}",
+                        if now { t.monitor_state_on } else { t.monitor_state_off },
+                    ),
+                )
+                .await;
+            show_pinned(bot, chat_id, mid, text, kb, state.bot_id).await?;
+        }
+        d if d.starts_with("watch:") => {
+            // watch:{game_id} — добавить игру в explicit-список.
+            // Game.host/map придёт из tick() когда игра в следующий раз попадёт
+            // в current_games; пока что кладём минимальный снапшот.
+            if let Some(id_str) = d.strip_prefix("watch:") {
+                if let Ok(game_id) = id_str.parse::<i64>() {
+                    {
+                        let mut ws = state.watch_state.lock().unwrap();
+                        let user = ws.user_mut(uid);
+                        user.explicit_games.entry(game_id).or_insert(
+                            crate::watcher::WatchedGame {
+                                id: game_id,
+                                map: String::new(),
+                                host: String::new(),
+                                taken: 0,
+                                total: 0,
+                            },
+                        );
+                    } // MutexGuard released here, before await
+                    let _ = bot
+                        .answer_callback_query(cq_id)
+                        .text("👁")
+                        .await;
+                }
+            }
         }
         "addmap" | "addhost" | "addname" => {
             let (pending, prompt) = match data {

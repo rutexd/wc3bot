@@ -6,6 +6,7 @@ mod migrations;
 mod norm;
 mod pinger;
 mod quiet;
+mod watcher;
 
 use anyhow::{bail, Context, Result};
 use std::{
@@ -128,19 +129,22 @@ async fn run_async() -> Result<()> {
     let database = std::sync::Arc::new(db::Db::open("wc3bot.db")?);
     let deleted: std::sync::Arc<std::sync::Mutex<HashSet<(i64, i32)>>> =
         std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+    let watch_state: std::sync::Arc<std::sync::Mutex<watcher::WatchState>> =
+        std::sync::Arc::new(std::sync::Mutex::new(watcher::WatchState::default()));
 
     {
         let bot = bot.clone();
         let database = database.clone();
         let deleted = deleted.clone();
+        let watch_state = watch_state.clone();
         tokio::spawn(async move {
-            if let Err(e) = poller(bot, database, deleted).await {
+            if let Err(e) = poller(bot, database, deleted, watch_state).await {
                 log::error!("poller остановлен: {e:#}");
             }
         });
     }
 
-    let state = handlers::AppState::new(database, me.id, deleted);
+    let state = handlers::AppState::new(database, me.id, deleted, watch_state);
     let handler = teloxide::dptree::entry()
         .branch(Update::filter_message().endpoint(handlers::handle_message))
         .branch(Update::filter_callback_query().endpoint(handlers::handle_callback));
@@ -178,6 +182,7 @@ async fn poller(
     bot: teloxide::Bot,
     database: std::sync::Arc<db::Db>,
     deleted: std::sync::Arc<std::sync::Mutex<HashSet<(i64, i32)>>>,
+    watch_state: std::sync::Arc<std::sync::Mutex<watcher::WatchState>>,
 ) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -224,6 +229,14 @@ async fn poller(
         };
 
         // --- detect new games → notify & start tracking ---
+        // Кеш user_settings на тик: используется в notification_kb (для скрытия
+        // кнопки «Следить») и в watcher::tick.
+        let settings_map: HashMap<i64, db::UserSettings> = database
+            .all_user_settings()
+            .into_iter()
+            .map(|s| (s.user_id, s))
+            .collect();
+
         for game in &games {
             if !seen.insert(game.id) {
                 continue;
@@ -262,12 +275,22 @@ async fn poller(
                     _ => {
                         // OFF / ALERT / GATE с пройденным gate → шлём сразу.
                         let lang = database.lang(active.chat_id);
+                        let user_settings = settings_map
+                            .get(&active.chat_id)
+                            .cloned()
+                            .unwrap_or_else(|| db::UserSettings {
+                                user_id: active.chat_id,
+                                watched_identity: None,
+                                monitoring_enabled: false,
+                            });
                         match bot
                             .send_message(ChatId(active.chat_id), game.notification_text(lang))
                             .reply_markup(pinger::notification_kb(
                                 lang,
                                 &active.sub.kind,
                                 &active.sub.pattern,
+                                game,
+                                &user_settings,
                             ))
                             .await
                         {
@@ -318,6 +341,58 @@ async fn poller(
             }
         }
 
+        // --- monitor: nickname/explicit watches of one's own hosted games ---
+        {
+            let watch_events = {
+                let mut state = watch_state.lock().unwrap();
+                watcher::tick(&mut state, &games, &settings_map)
+            };
+            for (user_id, ev) in watch_events {
+                if !database.notifications_enabled(user_id) {
+                    continue;
+                }
+                let lang = database.lang(user_id);
+                let text = match ev {
+                    watcher::WatchEvent::Started { game, nickname } => {
+                        let t = crate::loc::tr(lang);
+                        let fmt = if nickname {
+                            t.msg_monitor_started_nickname
+                        } else {
+                            t.msg_monitor_started_explicit
+                        };
+                        fmt.replace("{map}", &game.map)
+                            .replace("{host}", &game.host)
+                            .replace("{taken}", &game.slots_taken.to_string())
+                            .replace("{total}", &game.slots_total.to_string())
+                            .replace("{free}", &(game.slots_total - game.slots_taken).to_string())
+                    }
+                    watcher::WatchEvent::SlotsDelta { game, delta } => {
+                        let t = crate::loc::tr(lang);
+                        let fmt = if delta > 0 {
+                            t.msg_monitor_plus
+                        } else {
+                            t.msg_monitor_minus
+                        };
+                        let abs_d = delta.unsigned_abs();
+                        fmt.replace("{n}", &abs_d.to_string())
+                            .replace("{taken}", &game.slots_taken.to_string())
+                            .replace("{total}", &game.slots_total.to_string())
+                            .replace("{free}", &(game.slots_total - game.slots_taken).to_string())
+                    }
+                    watcher::WatchEvent::Filled { game } => {
+                        let t = crate::loc::tr(lang);
+                        t.msg_monitor_filled
+                            .replace("{taken}", &game.slots_taken.to_string())
+                            .replace("{total}", &game.slots_total.to_string())
+                            .replace("{free}", &(game.slots_total - game.slots_taken).to_string())
+                    }
+                };
+                if let Err(e) = bot.send_message(ChatId(user_id), text).await {
+                    log::warn!("poller: monitor send failed in {}: {e}", user_id);
+                }
+            }
+        }
+
         // --- PMODE_GATE: лобби, ждущие набора игроков. ---
         {
             let mut promoted: Vec<(i64, Vec<TrackedGame>)> = Vec::new();
@@ -349,12 +424,22 @@ async fn poller(
                         let Some(sub) = database.get_sub(sub_id) else { continue; };
                         let lang = database.lang(chat_id);
                         let text = current.notification_text(lang);
+                        let user_settings = settings_map
+                            .get(&chat_id)
+                            .cloned()
+                            .unwrap_or_else(|| db::UserSettings {
+                                user_id: chat_id,
+                                watched_identity: None,
+                                monitoring_enabled: false,
+                            });
                         match bot
                             .send_message(ChatId(chat_id), text)
                             .reply_markup(pinger::notification_kb(
                                 lang,
                                 &sub.kind,
                                 &sub.pattern,
+                                current,
+                                &user_settings,
                             ))
                             .await
                         {
@@ -441,17 +526,27 @@ async fn poller(
                 // game still alive → update message
                 for entry in entries.iter_mut() {
                     let text = pinger::pinger_msg(current, entry.lang);
-if let Err(e) = bot
-                    .edit_message_text(entry.chat_id, entry.message_id, text.clone())
-                    .reply_markup(pinger::notification_kb(
-                        entry.lang,
-                        &entry.sub_kind,
-                        &entry.sub_pattern,
-                    ))
-                    .await
-                {
-                    log::warn!("poller: failed to edit msg in {}: {e}", entry.chat_id);
-                }
+                    let user_settings = settings_map
+                        .get(&entry.chat_id.0)
+                        .cloned()
+                        .unwrap_or_else(|| db::UserSettings {
+                            user_id: entry.chat_id.0,
+                            watched_identity: None,
+                            monitoring_enabled: false,
+                        });
+                    if let Err(e) = bot
+                        .edit_message_text(entry.chat_id, entry.message_id, text.clone())
+                        .reply_markup(pinger::notification_kb(
+                            entry.lang,
+                            &entry.sub_kind,
+                            &entry.sub_pattern,
+                            current,
+                            &user_settings,
+                        ))
+                        .await
+                    {
+                        log::warn!("poller: failed to edit msg in {}: {e}", entry.chat_id);
+                    }
                     entry.game = current.clone();
                 }
             } else {
@@ -460,14 +555,24 @@ if let Err(e) = bot
                 log::info!("poller: game {} gone, sending final message", game_id);
                 for entry in entries.iter() {
                     let text = pinger::pinger_final_msg(&entry.game, wait, entry.lang);
-let _ = bot
-                    .edit_message_text(entry.chat_id, entry.message_id, text.clone())
-                    .reply_markup(pinger::notification_kb(
-                        entry.lang,
-                        &entry.sub_kind,
-                        &entry.sub_pattern,
-                    ))
-                    .await;
+                    let user_settings = settings_map
+                        .get(&entry.chat_id.0)
+                        .cloned()
+                        .unwrap_or_else(|| db::UserSettings {
+                            user_id: entry.chat_id.0,
+                            watched_identity: None,
+                            monitoring_enabled: false,
+                        });
+                    let _ = bot
+                        .edit_message_text(entry.chat_id, entry.message_id, text.clone())
+                        .reply_markup(pinger::notification_kb(
+                            entry.lang,
+                            &entry.sub_kind,
+                            &entry.sub_pattern,
+                            &entry.game,
+                            &user_settings,
+                        ))
+                        .await;
                 }
                 to_remove.push(game_id);
             }

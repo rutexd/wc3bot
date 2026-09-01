@@ -101,4 +101,16 @@ pub fn run(conn: &Connection) {
         "ALTER TABLE subs ADD COLUMN alert_count INTEGER NOT NULL DEFAULT 1",
         [],
     );
+
+    // 006: per-user settings — monitoring of one's own hosted games.
+    //      watched_identity is "Name#12345" (case-insensitive match against Game.host).
+    //      monitoring_enabled toggles nickname-mode globally for this user.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS user_settings (
+             user_id INTEGER PRIMARY KEY REFERENCES users(chat_id) ON DELETE CASCADE,
+             watched_identity TEXT,
+             monitoring_enabled INTEGER NOT NULL DEFAULT 0
+          );",
+    )
+    .expect("failed to create user_settings");
 }
