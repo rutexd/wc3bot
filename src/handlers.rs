@@ -232,8 +232,25 @@ fn sub_view(s: &db::Sub, mute: Option<&db::MapMute>, t: &'static T) -> (String, 
         Some(ind) => format!("\n\n{}", ind),
         None => String::new(),
     };
+    // Краткая сводка режима мин. игроков — только для карт, потому что только
+    // для них фича имеет смысл (для карты известно `slots_taken`).
+    let pm_line = if s.kind == db::KIND_MAP {
+        let n = s.min_players.to_string();
+        let k = s.alert_count.to_string();
+        let value = match s.players_mode {
+            db::PMODE_GATE => t.pm_mini_gate.replace("{n}", &n),
+            db::PMODE_ALERT => t
+                .pm_mini_alert
+                .replace("{n}", &n)
+                .replace("{k}", &k),
+            _ => t.pm_mini_off.to_string(),
+        };
+        format!("\n\n{}: {}", t.pm_mini_hdr, value)
+    } else {
+        String::new()
+    };
     let text = format!(
-        "{}\n\n{}: {}\n{}: {}\n{}: {}\n\n{}{}",
+        "{}\n\n{}: {}\n{}: {}\n{}: {}\n\n{}{}{}",
         t.sub_id.replace("{id}", &s.id.to_string()),
         t.sub_name,
         s.pattern,
@@ -242,6 +259,7 @@ fn sub_view(s: &db::Sub, mute: Option<&db::MapMute>, t: &'static T) -> (String, 
         t.sub_status,
         status,
         desc,
+        pm_line,
         mute_line,
     );
     let toggle_label = if effectively_disabled { t.btn_enable } else { t.btn_disable };

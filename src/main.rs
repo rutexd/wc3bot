@@ -181,7 +181,11 @@ async fn poller(
 ) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
-        .user_agent("wc3bot/0.1")
+        .user_agent(format!(
+            "wc3bot/{} (+{})",
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_REPOSITORY"),
+        ))
         .build()?;
 
     let interval = Duration::from_secs(
