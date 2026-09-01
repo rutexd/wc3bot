@@ -119,24 +119,24 @@ fn monitor_screen(state: &AppState, uid: i64, t: &'static T) -> (String, InlineK
     } else {
         t.monitor_state_off
     };
-    text.push_str(&format!("{}: {}\n", t.pm_mode, state_label));
+    text.push_str(&format!("{}: {}\n", t.monitor_label, state_label));
 
     match settings.watched_identity.as_deref() {
         Some(id) => text.push_str(&t.monitor_current_identity.replace("{id}", id)),
         None => text.push_str(t.monitor_no_identity),
     };
 
-    // список активных explicit-слежек
+    // список активных explicit-слежек (показываем заголовок и строки только
+    // если слежки реально есть — иначе секция скрыта целиком).
     let watch_state = state.watch_state.lock().unwrap();
-    if let Some(user_state) = watch_state.users.get(&uid) {
-        if !user_state.explicit_games.is_empty() {
-            text.push_str(&format!("\n\n{}", t.monitor_active_hdr));
-            // собираем map+host из last_taken/last_total не сможем — у нас только id
-            // для полноты покажем только game_id, map/host не знаем без Game
-            // (мы их не храним, чтобы не дублировать API state).
-            // Вместо этого покажем id, чтобы юзер понимал "что-то следится".
-            // TODO в будущем: хранить map+host в explicit_games как RichGame.
-            // Сейчас покажем id, чтобы не молча игнорировать.
+    let active_count = watch_state
+        .users
+        .get(&uid)
+        .map(|u| u.explicit_games.len())
+        .unwrap_or(0);
+    if active_count > 0 {
+        text.push_str(&format!("\n\n{}", t.monitor_active_hdr));
+        if let Some(user_state) = watch_state.users.get(&uid) {
             for (gid, wg) in &user_state.explicit_games {
                 if !wg.map.is_empty() {
                     text.push_str(&format!(
@@ -153,11 +153,7 @@ fn monitor_screen(state: &AppState, uid: i64, t: &'static T) -> (String, InlineK
                     text.push_str(&format!("\n• game #{gid}"));
                 }
             }
-        } else {
-            text.push_str(&format!("\n\n{}", t.monitor_active_none));
         }
-    } else {
-        text.push_str(&format!("\n\n{}", t.monitor_active_none));
     }
     drop(watch_state);
 
