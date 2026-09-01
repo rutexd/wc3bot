@@ -156,6 +156,27 @@ pub struct T {
     pub st_quiet_hdr: &'static str,
     pub st_subs_hdr: &'static str,
     pub tz_label: &'static str, // {sign}{h}:{m:02}
+    // Min-players gate (per subscription)
+    pub btn_players: &'static str,        // кнопка в карте
+    pub pm_title: &'static str,           // {name} {kind}
+    pub pm_mode: &'static str,
+    pub pm_mode_off: &'static str,
+    pub pm_mode_gate: &'static str,
+    pub pm_mode_alert: &'static str,
+    pub pm_mode_desc_off: &'static str,
+    pub pm_mode_desc_gate: &'static str,
+    pub pm_mode_desc_alert: &'static str,
+    pub pm_threshold: &'static str,        // {n}
+    pub pm_alert_count: &'static str,      // {n}
+    pub pm_alert_count_hint: &'static str, // подпись «сколько раз продублировать»
+    pub pm_alert_count_dec: &'static str,
+    pub pm_alert_count_inc: &'static str,
+    pub pm_help: &'static str,             // краткое объяснение
+    pub pm_pick_number: &'static str,
+    pub pm_custom: &'static str,           // «+» на всю ширину
+    pub prompt_pm_custom: &'static str,    // {min} {max}
+    pub msg_pm_invalid: &'static str,      // {min} {max}
+    pub msg_pm_alert_extra: &'static str,  // {n} {map} для доп. оповещения
 }
 
 const EN: T = T {
@@ -265,6 +286,26 @@ const EN: T = T {
     st_quiet_hdr: "Notification window",
     st_subs_hdr: "Your subscriptions",
     tz_label: "{sign}{h}:{m:02}",
+    btn_players: "🎮 Min players",
+    pm_title: "🎮 Min players: {kind} \u{00ab}{name}\u{00bb}",
+    pm_mode: "Mode",
+    pm_mode_off: "Off",
+    pm_mode_gate: "Gate",
+    pm_mode_alert: "Alert",
+    pm_mode_desc_off: "Disabled — notify as usual.",
+    pm_mode_desc_gate: "Notify only once the lobby has at least N players.",
+    pm_mode_desc_alert: "Notify as usual, then send an extra message when the lobby reaches N players.",
+    pm_threshold: "Threshold",
+    pm_alert_count: "Alert repeats: {n}",
+    pm_alert_count_hint: "How many extra messages to send in Alert mode.",
+    pm_alert_count_dec: "➖",
+    pm_alert_count_inc: "➕",
+    pm_help: "How it works:\n• Off — feature disabled.\n• Gate — you'll only get the lobby ping once it has at least N players.\n• Alert — you'll get the lobby ping immediately, plus an extra reminder when it reaches N players.",
+    pm_pick_number: "Pick a threshold (1–12), or tap ✏️ to enter your own (1–24):",
+    pm_custom: "✏️ Custom…",
+    prompt_pm_custom: "Send the minimum number of players (1–24).",
+    msg_pm_invalid: "⚠️ Enter a number between {min} and {max}.",
+    msg_pm_alert_extra: "🔥 {n} players on \u{00ab}{map}\u{00bb} — jump in!",
 };
 
 const RU: T = T {
@@ -375,6 +416,26 @@ const RU: T = T {
     st_quiet_hdr: "Время уведомлений",
     st_subs_hdr: "Твои подписки",
     tz_label: "{sign}{h}:{m:02}",
+    btn_players: "🎮 Мин. игроков",
+    pm_title: "🎮 Мин. игроков: {kind} «{name}»",
+    pm_mode: "Режим",
+    pm_mode_off: "Выкл",
+    pm_mode_gate: "Гейт",
+    pm_mode_alert: "Алерт",
+    pm_mode_desc_off: "Выключено — уведомляем как обычно.",
+    pm_mode_desc_gate: "Уведомляем только когда в лобби набралось N игроков.",
+    pm_mode_desc_alert: "Уведомляем как обычно, плюс отдельное сообщение когда набралось N игроков.",
+    pm_threshold: "Порог",
+    pm_alert_count: "Повторов алерта: {n}",
+    pm_alert_count_hint: "Сколько дополнительных сообщений слать в режиме «Алерт».",
+    pm_alert_count_dec: "➖",
+    pm_alert_count_inc: "➕",
+    pm_help: "Как это работает:\n• Выкл — фича отключена.\n• Гейт — уведомление о лобби придёт только когда наберётся N игроков.\n• Алерт — уведомление о лобби придёт сразу, плюс отдельное напоминание когда наберётся N игроков.",
+    pm_pick_number: "Выбери порог (1–12) или нажми ✏️, чтобы ввести свой (1–24):",
+    pm_custom: "✏️ Свой…",
+    prompt_pm_custom: "Отправь минимальное число игроков (1–24).",
+    msg_pm_invalid: "⚠️ Введи число от {min} до {max}.",
+    msg_pm_alert_extra: "🔥 {n} игроков на «{map}» — залетай!",
 };
 
 pub fn tr(lang: Lang) -> &'static T {

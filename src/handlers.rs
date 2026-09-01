@@ -28,6 +28,13 @@ pub enum Pending {
     QhStart,
     QhEnd { start_min: i32 },
     QhTz { start_min: i32, end_min: i32 },
+    /// Ожидаем ввод кастомного порога мин. игроков. mode/alert_count
+    /// храним, чтобы после ввода применить их вместе с числом.
+    PmCustom {
+        sub_id: i64,
+        mode: i32,
+        alert_count: i32,
+    },
 }
 
 #[derive(Clone)]
@@ -248,6 +255,10 @@ fn sub_view(s: &db::Sub, mute: Option<&db::MapMute>, t: &'static T) -> (String, 
         mid_row.push(btn(t.btn_hosts, &format!("hosts:{}", s.id)));
     }
     rows.push(mid_row);
+    // Min-players gate — только для карт, потому что для карты известно `slots_taken`.
+    if s.kind == db::KIND_MAP {
+        rows.push(vec![btn(t.btn_players, &format!("pm:{}", s.id))]);
+    }
     rows.push(vec![btn(t.btn_to_manage, "manage"), btn(t.btn_menu, "menu")]);
     (text, InlineKeyboardMarkup::new(rows))
 }
@@ -307,6 +318,91 @@ fn done_kb(t: &'static T) -> InlineKeyboardMarkup {
         vec![btn(t.btn_done, "done")],
         vec![btn(t.btn_cancel, "cancel")],
     ])
+}
+
+/// Режим мин. игроков в короткую подпись (для экрана настройки).
+fn pm_mode_label(mode: i32, t: &'static T) -> &'static str {
+    match mode {
+        db::PMODE_GATE => t.pm_mode_gate,
+        db::PMODE_ALERT => t.pm_mode_alert,
+        _ => t.pm_mode_off,
+    }
+}
+
+/// Описание текущего режима.
+fn pm_mode_desc(mode: i32, t: &'static T) -> &'static str {
+    match mode {
+        db::PMODE_GATE => t.pm_mode_desc_gate,
+        db::PMODE_ALERT => t.pm_mode_desc_alert,
+        _ => t.pm_mode_desc_off,
+    }
+}
+
+/// Экран настройки мин. игроков: режим, описание, порог (если включён),
+/// счётчик повторов (только в alert).
+fn pm_screen(
+    sub: &db::Sub,
+    t: &'static T,
+) -> (String, InlineKeyboardMarkup) {
+    let title = t
+        .pm_title
+        .replace("{name}", &sub.pattern)
+        .replace("{kind}", kind_label(&sub.kind, t));
+
+    let mode = sub.players_mode;
+    let mut text = format!(
+        "{}\n\n{}: {}\n{}",
+        title,
+        t.pm_mode,
+        pm_mode_label(mode, t),
+        pm_mode_desc(mode, t),
+    );
+
+    // Цикл режимов: off → gate → alert → off.
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    rows.push(vec![btn(t.pm_mode, &format!("pmcycle:{}", sub.id))]);
+
+    if mode != db::PMODE_OFF {
+        text.push_str(&format!(
+            "\n\n{}: {}",
+            t.pm_threshold,
+            sub.min_players
+        ));
+        text.push_str(&format!("\n{}", t.pm_pick_number));
+        // 4×3 = 12 кнопок 1..12
+        for chunk in (1..=12).collect::<Vec<_>>().chunks(4) {
+            rows.push(
+                chunk
+                    .iter()
+                    .map(|n| btn(&n.to_string(), &format!("pmn:{}:{}", sub.id, n)))
+                    .collect(),
+            );
+        }
+        // «+» на всю ширину для кастомного ввода
+        rows.push(vec![btn(t.pm_custom, &format!("pmcustom:{}", sub.id))]);
+    } else {
+        // Для off показываем только общее описание
+        text.push_str(&format!("\n\n{}", t.pm_help));
+    }
+
+    if mode == db::PMODE_ALERT {
+        text.push_str(&format!(
+            "\n\n{}\n{}",
+            t.pm_alert_count.replace("{n}", &sub.alert_count.to_string()),
+            t.pm_alert_count_hint
+        ));
+        rows.push(vec![
+            btn(t.pm_alert_count_dec, &format!("pmcd:{}", sub.id)),
+            btn(
+                &t.pm_alert_count.replace("{n}", &sub.alert_count.to_string()),
+                &format!("pmci:{}", sub.id),
+            ),
+            btn(t.pm_alert_count_inc, &format!("pmci:{}", sub.id)),
+        ]);
+    }
+
+    rows.push(vec![btn(t.btn_to_manage, &format!("hback:{}", sub.id))]);
+    (text, InlineKeyboardMarkup::new(rows))
 }
 
 fn settings_text(t: &'static T) -> String {
@@ -618,6 +714,33 @@ pub fn handle_message(
                     show(bot, chat_id, None, text, kb).await?;
                 }
             }
+            Some(Pending::PmCustom { sub_id, mode, alert_count }) => {
+                match trimmed.parse::<i32>() {
+                    Ok(n) if n >= 1 && n <= 24 => {
+                        state.db.set_min_players(sub_id, n, mode, alert_count);
+                        state.clear_pending(uid);
+                        if let Some(s) = state.db.get_sub(sub_id) {
+                            let (text, kb) = pm_screen(&s, t);
+                            show(bot, chat_id, None, text, kb).await?;
+                        }
+                    }
+                    _ => {
+                        // Остаёмся в pending — даём ещё попытку.
+                        state.set_pending(
+                            uid,
+                            Pending::PmCustom { sub_id, mode, alert_count },
+                        );
+                        bot.send_message(
+                            chat_id,
+                            t.msg_pm_invalid
+                                .replace("{min}", "1")
+                                .replace("{max}", "24"),
+                        )
+                        .reply_markup(cancel_kb(t))
+                        .await?;
+                    }
+                }
+            }
             None => {
                 bot.send_message(chat_id, t.msg_use_menu).await?;
             }
@@ -912,6 +1035,99 @@ async fn route_callback(
                 "map" | "hback" => {
                     let mute = find_mute(&state, uid, &sub.kind, &sub.pattern);
                     let (text, kb) = sub_view(&sub, mute.as_ref(), t);
+                    show(bot, chat_id, mid, text, kb).await?;
+                }
+                "pm" => {
+                    if sub.kind != db::KIND_MAP {
+                        // Защита: фича осмысленна только для карт.
+                        let _ = bot.answer_callback_query(cq_id).await;
+                        return Ok(());
+                    }
+                    let (text, kb) = pm_screen(&sub, t);
+                    show(bot, chat_id, mid, text, kb).await?;
+                }
+                "pmcycle" => {
+                    if sub.kind != db::KIND_MAP {
+                        let _ = bot.answer_callback_query(cq_id).await;
+                        return Ok(());
+                    }
+                    let next_mode = match sub.players_mode {
+                        db::PMODE_OFF => db::PMODE_GATE,
+                        db::PMODE_GATE => db::PMODE_ALERT,
+                        _ => db::PMODE_OFF,
+                    };
+                    // При переключении в gate/alert из off нужен валидный порог.
+                    // Используем 2 как разумный дефолт, если поле было 0.
+                    let new_threshold = if next_mode == db::PMODE_OFF {
+                        0
+                    } else if sub.min_players > 0 {
+                        sub.min_players
+                    } else {
+                        2
+                    };
+                    state
+                        .db
+                        .set_min_players(sub.id, new_threshold, next_mode, sub.alert_count);
+                    let sub = state.db.get_sub(sub.id).unwrap();
+                    let (text, kb) = pm_screen(&sub, t);
+                    show(bot, chat_id, mid, text, kb).await?;
+                }
+                "pmn" => {
+                    if let Some(n_str) = cb.extra.as_deref() {
+                        if let Ok(n) = n_str.parse::<i32>() {
+                            if n >= 1 && n <= 12 {
+                                state.db.set_min_players(
+                                    sub.id,
+                                    n,
+                                    sub.players_mode,
+                                    sub.alert_count,
+                                );
+                                let sub = state.db.get_sub(sub.id).unwrap();
+                                let (text, kb) = pm_screen(&sub, t);
+                                show(bot, chat_id, mid, text, kb).await?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                "pmcustom" => {
+                    // Запоминаем текущий режим и alert_count — после ввода
+                    // применим порог вместе с ними.
+                    state.set_pending(
+                        uid,
+                        Pending::PmCustom {
+                            sub_id: cb.id,
+                            mode: sub.players_mode,
+                            alert_count: sub.alert_count,
+                        },
+                    );
+                    bot.send_message(chat_id, t.prompt_pm_custom)
+                        .reply_markup(cancel_kb(t))
+                        .await?;
+                    return Ok(());
+                }
+                "pmcd" => {
+                    if sub.players_mode != db::PMODE_ALERT {
+                        return Ok(());
+                    }
+                    let next = (sub.alert_count - 1).max(db::ALERT_COUNT_MIN);
+                    state
+                        .db
+                        .set_min_players(sub.id, sub.min_players, sub.players_mode, next);
+                    let sub = state.db.get_sub(sub.id).unwrap();
+                    let (text, kb) = pm_screen(&sub, t);
+                    show(bot, chat_id, mid, text, kb).await?;
+                }
+                "pmci" => {
+                    if sub.players_mode != db::PMODE_ALERT {
+                        return Ok(());
+                    }
+                    let next = (sub.alert_count + 1).min(db::ALERT_COUNT_MAX);
+                    state
+                        .db
+                        .set_min_players(sub.id, sub.min_players, sub.players_mode, next);
+                    let sub = state.db.get_sub(sub.id).unwrap();
+                    let (text, kb) = pm_screen(&sub, t);
                     show(bot, chat_id, mid, text, kb).await?;
                 }
                 "toggle" => {

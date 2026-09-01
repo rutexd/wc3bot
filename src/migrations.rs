@@ -84,4 +84,21 @@ pub fn run(conn: &Connection) {
         "ALTER TABLE users ADD COLUMN qh_end_min INTEGER",
         [],
     );
+
+    // 005: per-subscription "min players" gate. min_players=0 disables the feature.
+    //      players_mode: 0 = off, 1 = gate (notify only once threshold is reached),
+    //      2 = alert (notify as usual + extra message on threshold).
+    //      alert_count is the number of extra messages to send in mode 2.
+    let _ = conn.execute(
+        "ALTER TABLE subs ADD COLUMN min_players INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE subs ADD COLUMN players_mode INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE subs ADD COLUMN alert_count INTEGER NOT NULL DEFAULT 1",
+        [],
+    );
 }

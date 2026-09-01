@@ -163,6 +163,17 @@ struct TrackedGame {
     sub_pattern: String,
 }
 
+/// Лобби, ожидающие набора минимального числа игроков (PMODE_GATE).
+/// Хранится в памяти poller; при рестарте буфер сбрасывается — пользователь
+/// получит уведомление по факту, а не «вдогонку» задним числом.
+struct GatedEntry {
+    game: api::Game,
+    /// Пары (chat_id, sub_id) — кому ещё не ушло уведомление, потому что
+    /// slots_taken был ниже порога. Когда порог пересечён, шлём каждому
+    /// из этого списка и удаляем.
+    pending: Vec<(i64, i64)>,
+}
+
 async fn poller(
     bot: teloxide::Bot,
     database: std::sync::Arc<db::Db>,
@@ -191,6 +202,11 @@ async fn poller(
 
     // game_id -> all tracked messages for that game
     let mut tracked: HashMap<i64, Vec<TrackedGame>> = HashMap::new();
+    // game_id -> gated sub-pairs (chat_id, sub_id), ожидающие набора игроков в PMODE_GATE
+    let mut gated: HashMap<i64, GatedEntry> = HashMap::new();
+    // game_id -> sub_id, для которых уже отправлен PMODE_ALERT extra-месседж
+    // (защита от повторов на каждом тике).
+    let mut alerted: HashMap<i64, HashSet<i64>> = HashMap::new();
 
     loop {
         tokio::time::sleep(interval).await;
@@ -220,39 +236,66 @@ async fn poller(
                 }
             }
 
+            // PMODE_GATE: собираем пары (chat_id, sub_id), которые прошли base,
+            // но провалилились на пороге — кладём в gated.
+            let mut gated_pending: Vec<(i64, i64)> = Vec::new();
+
             for active in active {
                 if !*active_window_cache.get(&active.chat_id).unwrap_or(&true) {
                     continue;
                 }
-                if database.should_notify(&active.sub, &game.map, &game.host, &game.name) {
-                    let lang = database.lang(active.chat_id);
-                    match bot
-                        .send_message(ChatId(active.chat_id), game.notification_text(lang))
-                        .reply_markup(pinger::notification_kb(
-                            lang,
-                            &active.sub.kind,
-                            &active.sub.pattern,
-                        ))
-                        .await
-                    {
-                        Ok(m) => {
-                            tracked.entry(game.id).or_default().push(TrackedGame {
-                                chat_id: ChatId(active.chat_id),
-                                message_id: m.id,
-                                game: game.clone(),
+                if !database.matches_base(&active.sub, &game.map, &game.host, &game.name) {
+                    continue;
+                }
+                // base-критерии пройдены. Дальше смотрим на min-players.
+                let taken = game.slots_taken;
+                let gate_open = db::Db::min_players_gate_passed(&active.sub, taken);
+                match active.sub.players_mode {
+                    db::PMODE_GATE if !gate_open => {
+                        // Ждём набора игроков.
+                        gated_pending.push((active.chat_id, active.sub.id));
+                    }
+                    _ => {
+                        // OFF / ALERT / GATE с пройденным gate → шлём сразу.
+                        let lang = database.lang(active.chat_id);
+                        match bot
+                            .send_message(ChatId(active.chat_id), game.notification_text(lang))
+                            .reply_markup(pinger::notification_kb(
                                 lang,
-                                sub_kind: active.sub.kind.clone(),
-                                sub_pattern: active.sub.pattern.clone(),
-                            });
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "poller: не удалось отправить уведомление в {}: {e}",
-                                active.chat_id
-                            );
+                                &active.sub.kind,
+                                &active.sub.pattern,
+                            ))
+                            .await
+                        {
+                            Ok(m) => {
+                                tracked.entry(game.id).or_default().push(TrackedGame {
+                                    chat_id: ChatId(active.chat_id),
+                                    message_id: m.id,
+                                    game: game.clone(),
+                                    lang,
+                                    sub_kind: active.sub.kind.clone(),
+                                    sub_pattern: active.sub.pattern.clone(),
+                                });
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "poller: не удалось отправить уведомление в {}: {e}",
+                                    active.chat_id
+                                );
+                            }
                         }
                     }
                 }
+            }
+
+            if !gated_pending.is_empty() {
+                gated.insert(
+                    game.id,
+                    GatedEntry {
+                        game: game.clone(),
+                        pending: gated_pending,
+                    },
+                );
             }
         }
 
@@ -268,6 +311,122 @@ async fn poller(
             }
             for gid in empty {
                 tracked.remove(&gid);
+            }
+        }
+
+        // --- PMODE_GATE: лобби, ждущие набора игроков. ---
+        {
+            let mut promoted: Vec<(i64, Vec<TrackedGame>)> = Vec::new();
+            let mut gone: Vec<i64> = Vec::new();
+            for (&game_id, entry) in gated.iter_mut() {
+                let Some(current) = games.iter().find(|g| g.id == game_id) else {
+                    gone.push(game_id);
+                    continue;
+                };
+                let mut to_send: Vec<(i64, i64)> = Vec::new();
+                entry.pending.retain(|(chat_id, sub_id)| {
+                    let Some(sub) = database.get_sub(*sub_id) else { return false; };
+                    if !sub.enabled
+                        || sub.players_mode != db::PMODE_GATE
+                        || !db::Db::min_players_gate_passed(&sub, current.slots_taken)
+                    {
+                        return false;
+                    }
+                    if !database.is_in_notification_window(*chat_id) {
+                        return true;
+                    }
+                    to_send.push((*chat_id, *sub_id));
+                    false
+                });
+                entry.game = current.clone();
+                if !to_send.is_empty() {
+                    let mut new_tracked: Vec<TrackedGame> = Vec::new();
+                    for (chat_id, sub_id) in to_send {
+                        let Some(sub) = database.get_sub(sub_id) else { continue; };
+                        let lang = database.lang(chat_id);
+                        let text = current.notification_text(lang);
+                        match bot
+                            .send_message(ChatId(chat_id), text)
+                            .reply_markup(pinger::notification_kb(
+                                lang,
+                                &sub.kind,
+                                &sub.pattern,
+                            ))
+                            .await
+                        {
+                            Ok(m) => new_tracked.push(TrackedGame {
+                                chat_id: ChatId(chat_id),
+                                message_id: m.id,
+                                game: current.clone(),
+                                lang,
+                                sub_kind: sub.kind.clone(),
+                                sub_pattern: sub.pattern.clone(),
+                            }),
+                            Err(e) => log::warn!(
+                                "poller: gated send failed in {}: {e}",
+                                chat_id
+                            ),
+                        }
+                    }
+                    if !new_tracked.is_empty() {
+                        promoted.push((game_id, new_tracked));
+                    }
+                }
+                if entry.pending.is_empty() {
+                    gone.push(game_id);
+                }
+            }
+            for gid in gone {
+                gated.remove(&gid);
+            }
+            for (gid, entries) in promoted {
+                tracked.entry(gid).or_default().extend(entries);
+            }
+        }
+
+        // --- PMODE_ALERT: extra-сообщения о достижении порога. ---
+        // Проходим по всем играм, что мы «знаем» (видели или трекаем/ждём).
+        // Для каждой активной подписки PMODE_ALERT, у которой min_players
+        // достигнут, но alert ещё не отправлялся — шлём `alert_count` сообщений.
+        {
+            let active = database.all_active_subs();
+            for game in &games {
+                if !seen.contains(&game.id)
+                    && !tracked.contains_key(&game.id)
+                    && !gated.contains_key(&game.id)
+                {
+                    continue;
+                }
+                let already = alerted.entry(game.id).or_default();
+                for a in &active {
+                    if a.sub.players_mode != db::PMODE_ALERT {
+                        continue;
+                    }
+                    if !db::Db::min_players_alert_should_send(&a.sub, game.slots_taken) {
+                        continue;
+                    }
+                    if already.contains(&a.sub.id) {
+                        continue;
+                    }
+                    if !database.is_in_notification_window(a.chat_id) {
+                        continue;
+                    }
+                    let lang = database.lang(a.chat_id);
+                    let t = crate::loc::tr(lang);
+                    let extra_text = t
+                        .msg_pm_alert_extra
+                        .replace("{n}", &game.slots_taken.to_string())
+                        .replace("{map}", &game.map);
+                    for _ in 0..a.sub.alert_count {
+                        if let Err(e) = bot
+                            .send_message(ChatId(a.chat_id), extra_text.clone())
+                            .await
+                        {
+                            log::warn!("poller: alert extra failed in {}: {e}", a.chat_id);
+                        }
+                    }
+                    already.insert(a.sub.id);
+                }
             }
         }
 
@@ -311,6 +470,7 @@ let _ = bot
         }
         for id in to_remove {
             tracked.remove(&id);
+            alerted.remove(&id);
         }
 
         // Keep the set bounded.

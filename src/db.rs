@@ -10,6 +10,15 @@ pub const HF_OFF: &str = "off";
 pub const HF_WHITELIST: &str = "whitelist";
 pub const HF_BLACKLIST: &str = "blacklist";
 
+/// Min-players feature modes for a single subscription.
+pub const PMODE_OFF: i32 = 0;
+pub const PMODE_GATE: i32 = 1;
+pub const PMODE_ALERT: i32 = 2;
+
+/// In PMODE_ALERT, the number of "X players on the map" extra messages per game.
+pub const ALERT_COUNT_MIN: i32 = 1;
+pub const ALERT_COUNT_MAX: i32 = 5;
+
 pub const SNOOZE_SECS: i64 = 12 * 60 * 60;
 
 pub fn now_ts() -> i64 {
@@ -45,6 +54,14 @@ pub struct Sub {
     pub enabled: bool,
     #[allow(dead_code)]
     pub host_filter: String,
+    /// 0 = feature off. Otherwise the lobby must have at least this many players
+    /// taken before the notification is sent (mode PMODE_GATE) or before the
+    /// extra alert is sent (mode PMODE_ALERT).
+    pub min_players: i32,
+    /// One of PMODE_OFF / PMODE_GATE / PMODE_ALERT.
+    pub players_mode: i32,
+    /// Number of extra alert messages to send in PMODE_ALERT.
+    pub alert_count: i32,
 }
 
 impl Sub {
@@ -176,7 +193,7 @@ impl Db {
     pub fn list_subs(&self, chat_id: i64) -> Vec<Sub> {
         let conn = self.0.lock().unwrap();
         let mut stmt = match conn.prepare_cached(
-            "SELECT id, chat_id, kind, pattern, enabled, host_filter FROM subs WHERE chat_id = ?1 ORDER BY id",
+            "SELECT id, chat_id, kind, pattern, enabled, host_filter, min_players, players_mode, alert_count FROM subs WHERE chat_id = ?1 ORDER BY id",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -191,7 +208,7 @@ impl Db {
             .lock()
             .unwrap()
             .query_row(
-                "SELECT id, chat_id, kind, pattern, enabled, host_filter FROM subs WHERE id = ?1",
+                "SELECT id, chat_id, kind, pattern, enabled, host_filter, min_players, players_mode, alert_count FROM subs WHERE id = ?1",
                 params![id],
                 row_to_sub,
             )
@@ -207,6 +224,46 @@ impl Db {
             .execute("UPDATE subs SET enabled = ?2 WHERE id = ?1", params![id, on as i64])
             .map(|n| n > 0)
             .unwrap_or(false)
+    }
+
+    /// Update min_players / players_mode / alert_count atomically.
+    /// Use PMODE_OFF to disable the feature (passes 0 for min_players).
+    pub fn set_min_players(&self, id: i64, min_players: i32, mode: i32, alert_count: i32) -> bool {
+        let min_players = min_players.max(0);
+        let mode = match mode {
+            PMODE_GATE | PMODE_ALERT => mode,
+            _ => PMODE_OFF,
+        };
+        let alert_count = alert_count.clamp(ALERT_COUNT_MIN, ALERT_COUNT_MAX);
+        // Если режим off — сбрасываем min_players в 0, чтобы старые значения
+        // не «оживали» при переключении обратно в gate/alert.
+        let min_players = if mode == PMODE_OFF { 0 } else { min_players };
+        self.0
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE subs SET min_players = ?2, players_mode = ?3, alert_count = ?4 WHERE id = ?1",
+                params![id, min_players, mode, alert_count],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    /// В PMODE_GATE: уведомление отправляется только когда `taken >= min_players`.
+    /// При `min_players == 0` — фича считается выключенной и gate всегда пройден.
+    /// В PMODE_ALERT: уведомление идёт всегда; «доп. сообщение» шлётся при `taken >= min_players`.
+    /// В PMODE_OFF: `true` (фича выключена).
+    pub fn min_players_gate_passed(sub: &Sub, taken: i32) -> bool {
+        match sub.players_mode {
+            PMODE_GATE if sub.min_players > 0 => taken >= sub.min_players,
+            _ => true,
+        }
+    }
+
+    /// Должно ли сейчас уйти «доп. сообщение» о достижении порога?
+    /// Имеет смысл только в PMODE_ALERT с min_players > 0.
+    pub fn min_players_alert_should_send(sub: &Sub, taken: i32) -> bool {
+        sub.players_mode == PMODE_ALERT && sub.min_players > 0 && taken >= sub.min_players
     }
 
     pub fn rename_sub(&self, id: i64, pattern: &str) -> Result<()> {
@@ -396,7 +453,8 @@ impl Db {
     pub fn all_active_subs(&self) -> Vec<ActiveSub> {
         let conn = self.0.lock().unwrap();
         let mut stmt = match conn.prepare_cached(
-            "SELECT s.id, s.chat_id, s.kind, s.pattern, s.enabled, s.host_filter
+            "SELECT s.id, s.chat_id, s.kind, s.pattern, s.enabled, s.host_filter,
+                    s.min_players, s.players_mode, s.alert_count
              FROM subs s JOIN users u ON u.chat_id = s.chat_id
              WHERE s.enabled = 1 AND u.notifications_enabled = 1
              ORDER BY s.id",
@@ -414,8 +472,10 @@ impl Db {
         .unwrap_or_default()
     }
 
-    /// Check if a game matches a subscription and should trigger a notification.
-    pub fn should_notify(&self, sub: &Sub, game_map: &str, game_host: &str, game_name: &str) -> bool {
+    /// Check if a game matches a subscription on the **base** criteria
+    /// (pattern, mute, host filter) — without the min-players gate.
+    /// `should_notify` then layers the gate on top.
+    pub fn matches_base(&self, sub: &Sub, game_map: &str, game_host: &str, game_name: &str) -> bool {
         let matched = match sub.kind.as_str() {
             KIND_HOST => crate::norm::matches(&sub.pattern, game_host),
             KIND_NAME => crate::norm::matches(&sub.pattern, game_name),
@@ -434,6 +494,23 @@ impl Db {
         }
         true
     }
+
+    /// Check if a game matches a subscription and should trigger a notification.
+    /// `taken` is the number of taken slots at the moment of decision; it gates
+    /// PMODE_GATE (returns false if the lobby hasn't filled enough).
+    /// Convenience wrapper for tests and external callers — the poller
+    /// composes `matches_base` + `min_players_gate_passed` itself so it can
+    /// route PMODE_GATE hits into a separate buffer.
+    #[allow(dead_code)]
+    pub fn should_notify(&self, sub: &Sub, game_map: &str, game_host: &str, game_name: &str, taken: i32) -> bool {
+        if !self.matches_base(sub, game_map, game_host, game_name) {
+            return false;
+        }
+        if !Self::min_players_gate_passed(sub, taken) {
+            return false;
+        }
+        true
+    }
 }
 
 fn row_to_sub(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sub> {
@@ -444,6 +521,9 @@ fn row_to_sub(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sub> {
         pattern: row.get(3)?,
         enabled: row.get::<_, i64>(4)? != 0,
         host_filter: row.get(5)?,
+        min_players: row.get::<_, i64>(6)? as i32,
+        players_mode: row.get::<_, i64>(7)? as i32,
+        alert_count: row.get::<_, i64>(8)? as i32,
     })
 }
 
@@ -1299,7 +1379,7 @@ mod tests {
     /// Simulates the poller matching logic for a single (game, subscription) pair.
     /// Returns true if the notification should be sent.
     fn should_notify(db: &Db, game: &crate::api::Game, sub: &Sub) -> bool {
-        db.should_notify(sub, &game.map, &game.host, &game.name)
+        db.should_notify(sub, &game.map, &game.host, &game.name, game.slots_taken)
     }
 
     /// Returns the list of subscriptions that would trigger a notification for a given game.
@@ -2073,5 +2153,238 @@ mod tests {
         assert_eq!(qh.tz_offset_min, 180);
         assert_eq!(qh.start_min, 22 * 60);
         assert_eq!(qh.end_min, 8 * 60);
+    }
+
+    // ===================== min-players gate tests =====================
+
+    fn map_sub(db: &Db, uid: i64, name: &str) -> Sub {
+        let _ = db.add_sub(uid, KIND_MAP, name);
+        db.list_subs(uid).into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn min_players_gate_passed_default_sub() {
+        let s = Sub {
+            id: 0,
+            chat_id: 1,
+            kind: KIND_MAP.into(),
+            pattern: "x".into(),
+            enabled: true,
+            host_filter: HF_OFF.into(),
+            min_players: 0,
+            players_mode: PMODE_OFF,
+            alert_count: 1,
+        };
+        // OFF / min=0 → всегда true
+        assert!(Db::min_players_gate_passed(&s, 0));
+        assert!(Db::min_players_gate_passed(&s, 100));
+    }
+
+    #[test]
+    fn min_players_gate_passed_gate_mode() {
+        let mut s = Sub {
+            id: 0,
+            chat_id: 1,
+            kind: KIND_MAP.into(),
+            pattern: "x".into(),
+            enabled: true,
+            host_filter: HF_OFF.into(),
+            min_players: 4,
+            players_mode: PMODE_GATE,
+            alert_count: 1,
+        };
+        // ниже порога
+        assert!(!Db::min_players_gate_passed(&s, 0));
+        assert!(!Db::min_players_gate_passed(&s, 3));
+        // ровно порог — пройдено (>=)
+        assert!(Db::min_players_gate_passed(&s, 4));
+        assert!(Db::min_players_gate_passed(&s, 5));
+        // если min_players=0 — фича выключена
+        s.min_players = 0;
+        assert!(Db::min_players_gate_passed(&s, 0));
+    }
+
+    #[test]
+    fn min_players_gate_passed_alert_mode_always_passes() {
+        // В alert-режиме основное уведомление должно идти сразу,
+        // gate не должен блокировать — он управляет только доп. сообщением.
+        let s = Sub {
+            id: 0,
+            chat_id: 1,
+            kind: KIND_MAP.into(),
+            pattern: "x".into(),
+            enabled: true,
+            host_filter: HF_OFF.into(),
+            min_players: 5,
+            players_mode: PMODE_ALERT,
+            alert_count: 1,
+        };
+        assert!(Db::min_players_gate_passed(&s, 0));
+        assert!(Db::min_players_gate_passed(&s, 4));
+        assert!(Db::min_players_gate_passed(&s, 100));
+    }
+
+    #[test]
+    fn min_players_alert_should_send_only_when_reached() {
+        let s = Sub {
+            id: 0,
+            chat_id: 1,
+            kind: KIND_MAP.into(),
+            pattern: "x".into(),
+            enabled: true,
+            host_filter: HF_OFF.into(),
+            min_players: 3,
+            players_mode: PMODE_ALERT,
+            alert_count: 2,
+        };
+        assert!(!Db::min_players_alert_should_send(&s, 0));
+        assert!(!Db::min_players_alert_should_send(&s, 2));
+        assert!(Db::min_players_alert_should_send(&s, 3));
+        assert!(Db::min_players_alert_should_send(&s, 4));
+    }
+
+    #[test]
+    fn min_players_alert_should_send_off_mode_never() {
+        let s = Sub {
+            id: 0,
+            chat_id: 1,
+            kind: KIND_MAP.into(),
+            pattern: "x".into(),
+            enabled: true,
+            host_filter: HF_OFF.into(),
+            min_players: 1,
+            players_mode: PMODE_OFF,
+            alert_count: 1,
+        };
+        assert!(!Db::min_players_alert_should_send(&s, 100));
+    }
+
+    #[test]
+    fn set_min_players_gate_persists() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 5, PMODE_GATE, 1);
+        let s = db.get_sub(s.id).unwrap();
+        assert_eq!(s.min_players, 5);
+        assert_eq!(s.players_mode, PMODE_GATE);
+        assert_eq!(s.alert_count, 1);
+    }
+
+    #[test]
+    fn set_min_players_off_resets_threshold() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 4, PMODE_GATE, 1);
+        db.set_min_players(s.id, 4, PMODE_OFF, 1);
+        let s = db.get_sub(s.id).unwrap();
+        assert_eq!(s.players_mode, PMODE_OFF);
+        assert_eq!(s.min_players, 0, "при выключении режима порог должен обнуляться");
+    }
+
+    #[test]
+    fn set_min_players_clamps_alert_count() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 2, PMODE_ALERT, 99);
+        let s = db.get_sub(s.id).unwrap();
+        assert_eq!(s.alert_count, ALERT_COUNT_MAX);
+        db.set_min_players(s.id, 2, PMODE_ALERT, 0);
+        let s = db.get_sub(s.id).unwrap();
+        assert_eq!(s.alert_count, ALERT_COUNT_MIN);
+    }
+
+    #[test]
+    fn set_min_players_unknown_mode_becomes_off() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 4, 99, 1);
+        let s = db.get_sub(s.id).unwrap();
+        assert_eq!(s.players_mode, PMODE_OFF);
+        assert_eq!(s.min_players, 0);
+    }
+
+    #[test]
+    fn set_min_players_survives_reopen() {
+        let (db, path) = temp_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 6, PMODE_ALERT, 3);
+        drop(db);
+
+        let db = Db::open(&path).unwrap();
+        let restored = db.get_sub(s.id).unwrap();
+        assert_eq!(restored.min_players, 6);
+        assert_eq!(restored.players_mode, PMODE_ALERT);
+        assert_eq!(restored.alert_count, 3);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn should_notify_off_mode_unaffected_by_taken() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        let g = game(1, "Pudge Wars", "Host", "Game");
+        // OFF, порог 0 → должно слать даже при taken=0
+        assert!(db.should_notify(&s, &g.map, &g.host, &g.name, 0));
+    }
+
+    #[test]
+    fn should_notify_gate_blocks_below_threshold() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 4, PMODE_GATE, 1);
+        let s = db.get_sub(s.id).unwrap();
+        let g = game(1, "Pudge Wars", "Host", "Game");
+        assert!(!db.should_notify(&s, &g.map, &g.host, &g.name, 3));
+        assert!(db.should_notify(&s, &g.map, &g.host, &g.name, 4));
+    }
+
+    #[test]
+    fn should_notify_alert_always_passes() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 5, PMODE_ALERT, 1);
+        let s = db.get_sub(s.id).unwrap();
+        let g = game(1, "Pudge Wars", "Host", "Game");
+        assert!(db.should_notify(&s, &g.map, &g.host, &g.name, 0));
+        assert!(db.should_notify(&s, &g.map, &g.host, &g.name, 5));
+    }
+
+    #[test]
+    fn matches_base_does_not_consider_min_players() {
+        // matches_base используется poller'ом, чтобы понять «подходит ли вообще».
+        // min_players НЕ должен влиять — иначе PMODE_GATE не сможет попасть в gated-буфер.
+        let db = memory_db();
+        db.ensure_user(1);
+        let s = map_sub(&db, 1, "Pudge");
+        db.set_min_players(s.id, 100, PMODE_GATE, 1);
+        let s = db.get_sub(s.id).unwrap();
+        let g = game(1, "Pudge Wars", "Host", "Game");
+        // base-matches есть, мьюта нет
+        assert!(db.matches_base(&s, &g.map, &g.host, &g.name));
+        // но should_notify при taken=0 зарежет
+        assert!(!db.should_notify(&s, &g.map, &g.host, &g.name, 0));
+    }
+
+    #[test]
+    fn min_players_isolation_between_users() {
+        let db = memory_db();
+        db.ensure_user(1);
+        db.ensure_user(2);
+        let s1 = map_sub(&db, 1, "Pudge");
+        let s2 = map_sub(&db, 2, "Pudge");
+        db.set_min_players(s1.id, 5, PMODE_GATE, 1);
+        // s2 остался в OFF
+        let s2 = db.get_sub(s2.id).unwrap();
+        assert_eq!(s2.players_mode, PMODE_OFF);
+        assert_eq!(s2.min_players, 0);
     }
 }
