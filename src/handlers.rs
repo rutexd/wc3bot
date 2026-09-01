@@ -1,5 +1,6 @@
 use crate::db::{self, Db};
 use crate::loc::{tr, T};
+use crate::pinger;
 use crate::watcher::WatchState;
 use futures::future::BoxFuture;
 use std::{
@@ -1077,6 +1078,67 @@ async fn route_callback(
                     let _ = bot
                         .answer_callback_query(cq_id)
                         .text("👁")
+                        .await;
+                }
+            }
+        }
+        d if d.starts_with("unwatch:") => {
+            // unwatch:{game_id} — отменить слежку за конкретной игрой.
+            // Чтобы кнопка сразу перерисовалась на «Следить», обновим
+            // reply_markup текущего сообщения. Снапшот игры берём из
+            // WatchState, если есть; иначе рисуем с пустыми полями.
+            if let Some(id_str) = d.strip_prefix("unwatch:") {
+                if let Ok(game_id) = id_str.parse::<i64>() {
+                    let (game, sub_kind, sub_pattern, lang) = {
+                        let ws = state.watch_state.lock().unwrap();
+                        let user = ws.users.get(&uid);
+                        let (kind, pattern, lang) = state
+                            .db
+                            .list_subs(uid)
+                            .first()
+                            .map(|s| (s.kind.clone(), s.pattern.clone(), state.db.lang(uid)))
+                            .unwrap_or_else(|| {
+                                (db::KIND_MAP.to_string(), String::new(), state.db.lang(uid))
+                            });
+                        let g = user
+                            .and_then(|u| u.explicit_games.get(&game_id).cloned())
+                            .map(|wg| crate::api::Game {
+                                id: wg.id,
+                                name: String::new(),
+                                host: wg.host,
+                                map: wg.map,
+                                server: String::new(),
+                                slots_taken: wg.taken,
+                                slots_total: wg.total,
+                                created: 0,
+                            });
+                        (g, kind, pattern, lang)
+                    };
+                    {
+                        let mut ws = state.watch_state.lock().unwrap();
+                        if let Some(u) = ws.users.get_mut(&uid) {
+                            u.explicit_games.remove(&game_id);
+                            u.last_taken.remove(&game_id);
+                            u.last_total.remove(&game_id);
+                        }
+                    }
+                    let user_settings = state.db.get_user_settings(uid);
+                    if let (Some(mid), Some(g)) = (mid, game.as_ref()) {
+                        let _ = bot
+                            .edit_message_reply_markup(chat_id, mid)
+                            .reply_markup(pinger::notification_kb(
+                                lang,
+                                &sub_kind,
+                                &sub_pattern,
+                                g,
+                                &user_settings,
+                                false,
+                            ))
+                            .await;
+                    }
+                    let _ = bot
+                        .answer_callback_query(cq_id)
+                        .text("🔕")
                         .await;
                 }
             }

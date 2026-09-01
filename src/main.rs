@@ -197,7 +197,7 @@ async fn poller(
         env::var("POLL_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(10),
+            .unwrap_or(5),
     );
 
     // Seed seen ids without notifying on startup.
@@ -283,7 +283,14 @@ async fn poller(
                                 watched_identity: None,
                                 monitoring_enabled: false,
                             });
-                        match bot
+                            let already_watching = {
+                                let ws = watch_state.lock().unwrap();
+                                ws.users
+                                    .get(&active.chat_id)
+                                    .map(|u| u.explicit_games.contains_key(&game.id))
+                                    .unwrap_or(false)
+                            };
+                            match bot
                             .send_message(ChatId(active.chat_id), game.notification_text(lang))
                             .reply_markup(pinger::notification_kb(
                                 lang,
@@ -291,6 +298,7 @@ async fn poller(
                                 &active.sub.pattern,
                                 game,
                                 &user_settings,
+                                already_watching,
                             ))
                             .await
                         {
@@ -368,23 +376,26 @@ async fn poller(
                     }
                     watcher::WatchEvent::SlotsDelta { game, delta } => {
                         let t = crate::loc::tr(lang);
-                        let fmt = if delta > 0 {
+                        if delta > 0 {
                             t.msg_monitor_plus
+                                .replace("{n}", &delta.to_string())
+                                .replace("{taken}", &game.slots_taken.to_string())
+                                .replace("{total}", &game.slots_total.to_string())
+                                .replace("{map}", &game.map)
                         } else {
                             t.msg_monitor_minus
-                        };
-                        let abs_d = delta.unsigned_abs();
-                        fmt.replace("{n}", &abs_d.to_string())
-                            .replace("{taken}", &game.slots_taken.to_string())
-                            .replace("{total}", &game.slots_total.to_string())
-                            .replace("{free}", &(game.slots_total - game.slots_taken).to_string())
+                                .replace("{delta}", &delta.to_string())
+                                .replace("{taken}", &game.slots_taken.to_string())
+                                .replace("{total}", &game.slots_total.to_string())
+                                .replace("{map}", &game.map)
+                        }
                     }
                     watcher::WatchEvent::Filled { game } => {
                         let t = crate::loc::tr(lang);
                         t.msg_monitor_filled
                             .replace("{taken}", &game.slots_taken.to_string())
                             .replace("{total}", &game.slots_total.to_string())
-                            .replace("{free}", &(game.slots_total - game.slots_taken).to_string())
+                            .replace("{map}", &game.map)
                     }
                 };
                 if let Err(e) = bot.send_message(ChatId(user_id), text).await {
@@ -432,7 +443,14 @@ async fn poller(
                                 watched_identity: None,
                                 monitoring_enabled: false,
                             });
-                        match bot
+                            let already_watching = {
+                                let ws = watch_state.lock().unwrap();
+                                ws.users
+                                    .get(&chat_id)
+                                    .map(|u| u.explicit_games.contains_key(&current.id))
+                                    .unwrap_or(false)
+                            };
+                            match bot
                             .send_message(ChatId(chat_id), text)
                             .reply_markup(pinger::notification_kb(
                                 lang,
@@ -440,6 +458,7 @@ async fn poller(
                                 &sub.pattern,
                                 current,
                                 &user_settings,
+                                already_watching,
                             ))
                             .await
                         {
@@ -534,6 +553,13 @@ async fn poller(
                             watched_identity: None,
                             monitoring_enabled: false,
                         });
+                    let already_watching = {
+                        let ws = watch_state.lock().unwrap();
+                        ws.users
+                            .get(&entry.chat_id.0)
+                            .map(|u| u.explicit_games.contains_key(&game_id))
+                            .unwrap_or(false)
+                    };
                     if let Err(e) = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
                         .reply_markup(pinger::notification_kb(
@@ -542,6 +568,7 @@ async fn poller(
                             &entry.sub_pattern,
                             current,
                             &user_settings,
+                            already_watching,
                         ))
                         .await
                     {
@@ -563,6 +590,13 @@ async fn poller(
                             watched_identity: None,
                             monitoring_enabled: false,
                         });
+                    let already_watching = {
+                        let ws = watch_state.lock().unwrap();
+                        ws.users
+                            .get(&entry.chat_id.0)
+                            .map(|u| u.explicit_games.contains_key(&game_id))
+                            .unwrap_or(false)
+                    };
                     let _ = bot
                         .edit_message_text(entry.chat_id, entry.message_id, text.clone())
                         .reply_markup(pinger::notification_kb(
@@ -571,6 +605,7 @@ async fn poller(
                             &entry.sub_pattern,
                             &entry.game,
                             &user_settings,
+                            already_watching,
                         ))
                         .await;
                 }

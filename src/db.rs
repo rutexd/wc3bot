@@ -1537,6 +1537,50 @@ mod tests {
         assert_eq!(matching_subs(&db, &g).len(), 1);
     }
 
+    /// Селектор `enfo` против карты `Enfos` — нормализация приводит обе
+    /// строки к нижнему регистру без не-алфанум-символов, и `enfo` ⊂ `enfos`.
+    /// Проверяем что матчинг работает по `map` (KIND_MAP) и по `name` (KIND_NAME).
+    #[test]
+    fn integration_enfo_selector_matches_enfos_map() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "enfo");
+        let g = game(1, "Enfos", "Host#1", "Some game");
+        assert_eq!(
+            matching_subs(&db, &g).len(),
+            1,
+            "KIND_MAP 'enfo' должен матчить карту 'Enfos'"
+        );
+    }
+
+    #[test]
+    fn integration_enfo_selector_matches_enfos_name() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_NAME, "enfo");
+        let g = game(1, "Some other map", "Host#1", "Enfos 1v1");
+        assert_eq!(
+            matching_subs(&db, &g).len(),
+            1,
+            "KIND_NAME 'enfo' должен матчить имя 'Enfos 1v1'"
+        );
+    }
+
+    /// Селектор `enfo` НЕ должен матчить карту, не содержащую enf/enfo.
+    /// Граничный кейс: `enfo` ⊂ `enforcers` (тоже матчится нормализацией).
+    /// А вот `enf` ⊄ `enfo` — это проверка ниже, в norm::tests.
+    #[test]
+    fn integration_enfo_selector_does_not_match_unrelated() {
+        let db = memory_db();
+        db.ensure_user(1);
+        let _ = db.add_sub(1, KIND_MAP, "enfo");
+        let g = game(1, "Pudge Wars", "Host#1", "Game");
+        assert!(
+            matching_subs(&db, &g).is_empty(),
+            "KIND_MAP 'enfo' НЕ должен матчить карту 'Pudge Wars'"
+        );
+    }
+
     #[test]
     fn integration_name_sub_no_match() {
         let db = memory_db();

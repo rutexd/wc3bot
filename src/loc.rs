@@ -184,6 +184,7 @@ pub struct T {
     // Monitor (per-user nickname/explicit watching of one's own hosted games)
     pub btn_monitor: &'static str,
     pub btn_monitor_watch: &'static str,
+    pub btn_monitor_unwatch: &'static str,
     pub monitor_title: &'static str,
     pub monitor_state_on: &'static str,
     pub monitor_state_off: &'static str,
@@ -341,6 +342,7 @@ const EN: T = T {
     msg_pm_alert_extra: "🔥 {n} players on \u{00ab}{map}\u{00bb} — jump in!",
     btn_monitor: "👁 Monitor",
     btn_monitor_watch: "👁 Watch",
+    btn_monitor_unwatch: "🔕 Unwatch",
     monitor_title: "👁 Monitor your games\n\nNotifies you when players join or leave your lobbies — ones you host (by identity) or ones you pick to watch (from a notification).",
     monitor_state_on: "Enabled",
     monitor_state_off: "Disabled",
@@ -359,9 +361,9 @@ const EN: T = T {
     monitor_active_item: "• {map} by {host} — {taken}/{total}",
     msg_monitor_started_explicit: "👁 Watching lobby \u{00ab}{map}\u{00ab} by {host} — {taken}/{total} (free: {free})",
     msg_monitor_started_nickname: "👁 I see you in lobby \u{00ab}{map}\u{00ab} by {host} — {taken}/{total} (free: {free})",
-    msg_monitor_plus: "➕ {n} joined ({taken}/{total}, free: {free})",
-    msg_monitor_minus: "➖ {n} left ({taken}/{total}, free: {free})",
-    msg_monitor_filled: "🔥 Lobby is full! ({taken}/{total}, free: {free})",
+    msg_monitor_plus: "+{n} ({taken}/{total}) {map}",
+    msg_monitor_minus: "{delta} ({taken}/{total}) {map}",
+    msg_monitor_filled: "🔥 ({taken}/{total}) {map}",
 };
 
 const RU: T = T {
@@ -499,6 +501,7 @@ const RU: T = T {
     msg_pm_alert_extra: "🔥 {n} игроков на «{map}» — залетай!",
     btn_monitor: "👁 Мониторинг",
     btn_monitor_watch: "👁 Следить",
+    btn_monitor_unwatch: "🔕 Отменить",
     monitor_title: "👁 Мониторинг своих игр\n\nУведомляет, когда кто-то заходит или выходит из твоих лобби — тех, что ты хостишь (по нику) или которые ты выбрал из уведомления.",
     monitor_state_on: "Включён",
     monitor_state_off: "Выключен",
@@ -517,9 +520,9 @@ const RU: T = T {
     monitor_active_item: "• {map} от {host} — {taken}/{total}",
     msg_monitor_started_explicit: "👁 Слежу за лобби «{map}» от {host} — {taken}/{total} (свободно: {free})",
     msg_monitor_started_nickname: "👁 Вижу тебя в лобби «{map}» от {host} — {taken}/{total} (свободно: {free})",
-    msg_monitor_plus: "➕ Зашли: {n} ({taken}/{total}, свободно: {free})",
-    msg_monitor_minus: "➖ Вышли: {n} ({taken}/{total}, свободно: {free})",
-    msg_monitor_filled: "🔥 Лобби заполнено! ({taken}/{total}, свободно: {free})",
+    msg_monitor_plus: "+{n} ({taken}/{total}) {map}",
+    msg_monitor_minus: "{n} ({taken}/{total}) {map}",
+    msg_monitor_filled: "🔥 ({taken}/{total}) {map}",
 };
 
 pub fn tr(lang: Lang) -> &'static T {

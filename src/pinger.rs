@@ -6,15 +6,20 @@ use crate::loc::{tr, Lang};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 /// Keyboard under a notification message — 2×2 grid:
-/// `[12h] [Off]` / `[👁 Watch] [✅]`
-/// The "👁 Watch" button is hidden when the user already monitors this
-/// lobby via nickname mode (see `crate::watcher::should_show_watch_button`).
+/// `[12h] [Off]` / `[👁 Watch | 👁 Unwatch] [✅]`
+///
+/// Watch-button logic:
+/// - hidden when the user already monitors this lobby via nickname mode
+///   (see `crate::watcher::should_show_watch_button`)
+/// - if `already_watching` is true, renders as "Unwatch" (with `unwatch:{game_id}`)
+/// - otherwise renders as "Watch" (with `watch:{game_id}`)
 pub fn notification_kb(
     lang: Lang,
     kind: &str,
     pattern: &str,
     game: &Game,
     user_settings: &UserSettings,
+    already_watching: bool,
 ) -> InlineKeyboardMarkup {
     let t = tr(lang);
     let mut rows: Vec<Vec<InlineKeyboardButton>> = vec![
@@ -31,10 +36,17 @@ pub fn notification_kb(
     ];
     let mut second_row = Vec::new();
     if crate::watcher::should_show_watch_button(user_settings, game) {
-        second_row.push(InlineKeyboardButton::callback(
-            t.btn_monitor_watch.to_string(),
-            format!("watch:{}", game.id),
-        ));
+        if already_watching {
+            second_row.push(InlineKeyboardButton::callback(
+                t.btn_monitor_unwatch.to_string(),
+                format!("unwatch:{}", game.id),
+            ));
+        } else {
+            second_row.push(InlineKeyboardButton::callback(
+                t.btn_monitor_watch.to_string(),
+                format!("watch:{}", game.id),
+            ));
+        }
     }
     second_row.push(InlineKeyboardButton::callback(
         t.btn_check.to_string(),
