@@ -5,10 +5,10 @@ use crate::db::UserSettings;
 use crate::loc::{tr, Lang};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-/// Keyboard under a notification message.
-/// 4-я кнопка "👁 Watch" появляется только если:
-/// - у пользователя ещё НЕТ identity, совпадающей с `game.host` при включённом мониторинге
-/// (см. `crate::watcher::should_show_watch_button`).
+/// Keyboard under a notification message — 2×2 grid:
+/// `[12h] [Off]` / `[👁 Watch] [✅]`
+/// The "👁 Watch" button is hidden when the user already monitors this
+/// lobby via nickname mode (see `crate::watcher::should_show_watch_button`).
 pub fn notification_kb(
     lang: Lang,
     kind: &str,
@@ -17,24 +17,31 @@ pub fn notification_kb(
     user_settings: &UserSettings,
 ) -> InlineKeyboardMarkup {
     let t = tr(lang);
-    let mut row = vec![
-        InlineKeyboardButton::callback(
-            t.btn_snooze.to_string(),
-            format!("snooze:{kind}:{pattern}"),
-        ),
-        InlineKeyboardButton::callback(
-            t.btn_mute.to_string(),
-            format!("mute:{kind}:{pattern}"),
-        ),
-        InlineKeyboardButton::callback(t.btn_check.to_string(), "check".to_string()),
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = vec![
+        vec![
+            InlineKeyboardButton::callback(
+                t.btn_snooze.to_string(),
+                format!("snooze:{kind}:{pattern}"),
+            ),
+            InlineKeyboardButton::callback(
+                t.btn_mute.to_string(),
+                format!("mute:{kind}:{pattern}"),
+            ),
+        ],
     ];
+    let mut second_row = Vec::new();
     if crate::watcher::should_show_watch_button(user_settings, game) {
-        row.push(InlineKeyboardButton::callback(
+        second_row.push(InlineKeyboardButton::callback(
             t.btn_monitor_watch.to_string(),
             format!("watch:{}", game.id),
         ));
     }
-    InlineKeyboardMarkup::new(vec![row])
+    second_row.push(InlineKeyboardButton::callback(
+        t.btn_check.to_string(),
+        "check".to_string(),
+    ));
+    rows.push(second_row);
+    InlineKeyboardMarkup::new(rows)
 }
 
 fn format_duration(d: Duration) -> String {
