@@ -1581,6 +1581,57 @@ mod tests {
         );
     }
 
+    /// Симметричный кейс: `snowzone` vs `Snow Zone` и наоборот.
+    /// После нормализации обе строки дают `snowzone`, поэтому должны матчиться
+    /// в обе стороны как KIND_MAP, так и KIND_NAME.
+    #[test]
+    fn integration_snowzone_selector_both_directions_map() {
+        let db = memory_db();
+        db.ensure_user(1);
+
+        let _ = db.add_sub(1, KIND_MAP, "snowzone");
+        let g_map = game(1, "Snow Zone", "Host#1", "Some game");
+        assert_eq!(
+            matching_subs(&db, &g_map).len(),
+            1,
+            "KIND_MAP 'snowzone' должен матчить карту 'Snow Zone'"
+        );
+
+        let db2 = memory_db();
+        db2.ensure_user(2);
+        let _ = db2.add_sub(2, KIND_MAP, "snow zone");
+        let g_map2 = game(2, "SnowZone", "Host#1", "Some game");
+        assert_eq!(
+            matching_subs(&db2, &g_map2).len(),
+            1,
+            "KIND_MAP 'snow zone' должен матчить карту 'SnowZone'"
+        );
+    }
+
+    #[test]
+    fn integration_snowzone_selector_both_directions_name() {
+        let db = memory_db();
+        db.ensure_user(1);
+
+        let _ = db.add_sub(1, KIND_NAME, "snowzone");
+        let g_name = game(1, "Some other map", "Host#1", "Snow Zone 2v2");
+        assert_eq!(
+            matching_subs(&db, &g_name).len(),
+            1,
+            "KIND_NAME 'snowzone' должен матчить имя 'Snow Zone 2v2'"
+        );
+
+        let db2 = memory_db();
+        db2.ensure_user(2);
+        let _ = db2.add_sub(2, KIND_NAME, "snow zone");
+        let g_name2 = game(2, "Some other map", "Host#1", "SnowZoneFFA");
+        assert_eq!(
+            matching_subs(&db2, &g_name2).len(),
+            1,
+            "KIND_NAME 'snow zone' должен матчить имя 'SnowZoneFFA'"
+        );
+    }
+
     #[test]
     fn integration_name_sub_no_match() {
         let db = memory_db();

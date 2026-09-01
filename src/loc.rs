@@ -228,7 +228,8 @@ const EN: T = T {
     welcome: "👋 Hi! I watch WarCraft 3 lobbies on wc3stats.\n\n\
               Add a subscription for a map or a host — I'll message you when a new lobby appears.\n\n\
               Names are matched case- and symbol-insensitively: \
-              \u{00ab}CHS\u{00bb} matches both \u{00ab}CHS -\u{00bb} and \u{00ab}something*chs*\u{00bb}.\n\n\
+              \u{00ab}CHS\u{00bb} matches \u{00ab}CHS\u{00bb} and \u{00ab}something\u{2026}chs\u{2026}\u{00bb}; \
+              \u{00ab}snowzone\u{00bb} matches \u{00ab}Snow Zone\u{00bb} and \u{00ab}SnowZone\u{00bb}.\n\n\
               ⚙️ More features in \u{00ab}Settings\u{00ab}.",
     st_hdr: "📊 Status:",
     st_notifications: "Notifications",
@@ -252,7 +253,7 @@ const EN: T = T {
     kind_map: "🗺 Map",
     kind_host: "👤 Host",
     kind_name: "📛 Name",
-    prompt_add_map: "🗺 Send me the map name to track.\n\nExamples: pudge, chs, legion td",
+    prompt_add_map: "🗺 Send me the map name to track.\n\nExamples: pudge, chs, legion td, snow zone",
     prompt_add_host: "👤 Send me the host name to track.\n\nExamples: HellWolf#31976, hellwolf\n\n⚠️ Host subscriptions don't support whitelist/blacklist.",
     prompt_add_name: "📛 Send me the game name to track.\n\nExamples: dota, tavern, fun",
     prompt_add_all: "✨ Send me a name — I'll subscribe you to map, host, and game name at once.\n\n⚠️ Combined subscriptions don't support whitelist/blacklist.",
@@ -387,7 +388,8 @@ const RU: T = T {
               Добавь подписку на карту или хоста — и я пришлю уведомление, \
               когда появится новое лобби.\n\n\
               Названия сравниваются без учёта регистра и символов: \
-              «CHS» совпадёт и с «CHS -», и с «something*chs*».\n\n\
+              «CHS» совпадёт с «CHS» и «something…chs…», \
+              «snowzone» — с «Snow Zone» и «SnowZone».\n\n\
               ⚙️ Дополнительные возможности — в «Настройках».",
     st_hdr: "📊 Статус:",
     st_notifications: "Уведомления",
@@ -411,7 +413,7 @@ const RU: T = T {
     kind_map: "🗺 Карта",
     kind_host: "👤 Хост",
     kind_name: "📛 Название",
-    prompt_add_map: "🗺 Отправь название карты для отслеживания.\n\nПримеры: pudge, chs, legion td",
+    prompt_add_map: "🗺 Отправь название карты для отслеживания.\n\nПримеры: pudge, chs, legion td, snow zone",
     prompt_add_host: "👤 Отправь имя хоста для отслеживания.\n\nПримеры: HellWolf#31976, hellwolf\n\n⚠️ Подписки для хоста не поддерживают белый/чёрный список.",
     prompt_add_name: "📛 Отправь название игры для отслеживания.\n\nПримеры: dota, tavern, fun",
     prompt_add_all: "✨ Отправь название — я подпишу на карту, хоста и название игры сразу.\n\n⚠️ Общие подписки не поддерживают белый/чёрный список.",
