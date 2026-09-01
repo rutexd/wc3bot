@@ -106,7 +106,6 @@ fn main_menu_kb(state: &AppState, uid: i64, t: &'static T) -> InlineKeyboardMark
     ];
     rows.extend(add_buttons_kb(t));
     rows.push(vec![btn(notif_label, "notif"), btn(t.btn_settings, "settings")]);
-    rows.push(vec![btn(t.btn_monitor, "monitor")]);
     InlineKeyboardMarkup::new(rows)
 }
 
@@ -505,6 +504,7 @@ fn settings_text(t: &'static T) -> String {
 fn settings_kb(t: &'static T) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![btn(t.btn_quiet, "quiet")],
+        vec![btn(t.btn_monitor, "monitor")],
         vec![btn(t.btn_lang, "lang")],
         vec![btn(t.btn_menu, "menu")],
     ])

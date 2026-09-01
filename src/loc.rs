@@ -227,7 +227,8 @@ const EN: T = T {
     welcome: "👋 Hi! I watch WarCraft 3 lobbies on wc3stats.\n\n\
               Add a subscription for a map or a host — I'll message you when a new lobby appears.\n\n\
               Names are matched case- and symbol-insensitively: \
-              \u{00ab}CHS\u{00bb} matches both \u{00ab}CHS -\u{00bb} and \u{00ab}something*chs*\u{00bb}.",
+              \u{00ab}CHS\u{00bb} matches both \u{00ab}CHS -\u{00bb} and \u{00ab}something*chs*\u{00bb}.\n\n\
+              ⚙️ More features in \u{00ab}Settings\u{00ab}.",
     st_hdr: "📊 Status:",
     st_notifications: "Notifications",
     st_enabled: "✅ Enabled",
@@ -340,7 +341,7 @@ const EN: T = T {
     msg_pm_alert_extra: "🔥 {n} players on \u{00ab}{map}\u{00bb} — jump in!",
     btn_monitor: "👁 Monitor",
     btn_monitor_watch: "👁 Watch",
-    monitor_title: "👁 Monitor your games",
+    monitor_title: "👁 Monitor your games\n\nTracks slot changes in lobbies you host (by identity) or pick to watch (from a notification).",
     monitor_state_on: "Enabled",
     monitor_state_off: "Disabled",
     monitor_no_identity: "Not set — tap «Set identity» to begin.",
@@ -384,7 +385,8 @@ const RU: T = T {
               Добавь подписку на карту или хоста — и я пришлю уведомление, \
               когда появится новое лобби.\n\n\
               Названия сравниваются без учёта регистра и символов: \
-              «CHS» совпадёт и с «CHS -», и с «something*chs*».",
+              «CHS» совпадёт и с «CHS -», и с «something*chs*».\n\n\
+              ⚙️ Дополнительные возможности — в «Настройках».",
     st_hdr: "📊 Статус:",
     st_notifications: "Уведомления",
     st_enabled: "✅ Включены",
@@ -497,7 +499,7 @@ const RU: T = T {
     msg_pm_alert_extra: "🔥 {n} игроков на «{map}» — залетай!",
     btn_monitor: "👁 Мониторинг",
     btn_monitor_watch: "👁 Следить",
-    monitor_title: "👁 Мониторинг своих игр",
+    monitor_title: "👁 Мониторинг своих игр\n\nСледит за изменениями слотов в лобби, которые ты хостишь (по нику) или которые ты выбрал из уведомления.",
     monitor_state_on: "Включён",
     monitor_state_off: "Выключен",
     monitor_no_identity: "Не задан — нажми «Задать ник», чтобы начать.",
