@@ -17,8 +17,9 @@ pub struct WatchedGame {
 /// Per-user state for the watcher.
 #[derive(Debug, Default)]
 pub struct UserWatch {
-    /// `game_id` в†’ `slots_taken` at the previous tick. Missing entry means
-    /// "we haven't seen this game yet" вЂ” first tick will emit `Started`.
+    /// `game_id` → `slots_taken` at the previous tick. Missing entry means
+    /// "we haven't seen this game yet" — first tick will emit `Started`
+    /// (nickname-mode only; explicit "Watch" just records the baseline).
     pub last_taken: HashMap<i64, i32>,
     /// `game_id` в†’ `slots_total` at the previous tick. Needed to detect
     /// transitions to "full" in `WatchEvent::Filled`.
@@ -181,6 +182,24 @@ pub fn tick(
             match (user.last_taken.get(&game.id), user.last_total.get(&game.id)) {
                 (None, _) => {
                     // First time we see this (user, game).
+                    user.last_taken.insert(game.id, taken);
+                    user.last_total.insert(game.id, total);
+
+                    // Explicit "Watch" — пользователь жмёт кнопку под
+                    // существующим уведомлением, "стартовое" сообщение
+                    // избыточно. Сразу фиксируем baseline, дальше шлём
+                    // только дельты и Filled.
+                    if is_explicit {
+                        if taken > 0 && taken == total {
+                            out.push((
+                                *user_id,
+                                WatchEvent::Filled { game: game.clone() },
+                            ));
+                        }
+                        continue;
+                    }
+
+                    // Nickname-mode — событие "твоя игра началась" полезно.
                     out.push((
                         *user_id,
                         WatchEvent::Started {
@@ -188,8 +207,6 @@ pub fn tick(
                             nickname: via_nickname,
                         },
                     ));
-                    user.last_taken.insert(game.id, taken);
-                    user.last_total.insert(game.id, total);
 
                     // If the game happens to be full at first sight, also
                     // emit Filled. (Unlikely but possible.)
@@ -371,7 +388,9 @@ mod tests {
     // --- tick: first sight ---
 
     #[test]
-    fn tick_first_sight_explicit_emits_started() {
+    fn tick_first_sight_explicit_emits_no_started() {
+        // Explicit "Watch" — пользователь сам нажал кнопку под уведомлением,
+        // "стартовое" сообщение избыточно. baseline фиксируется без событий.
         let mut state = WatchState::default();
         let user = state.user_mut(1);
         user.explicit_games.insert(100, WatchedGame { id: 100, map: "TestMap.w3x".into(), host: "Host#1".into(), taken: 0, total: 0 });
@@ -379,11 +398,7 @@ mod tests {
         let mut settings = HashMap::new();
         settings.insert(1, settings_with(1, None, false));
         let events = tick(&mut state, &games, &settings);
-        assert_eq!(events.len(), 1);
-        match &events[0].1 {
-            WatchEvent::Started { nickname, .. } => assert!(!*nickname),
-            _ => panic!("expected Started"),
-        }
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -480,9 +495,8 @@ mod tests {
         let mut settings = HashMap::new();
         settings.insert(1, settings_with(1, None, false));
         let e1 = tick(&mut state, &games1, &settings);
-        // 9/10 в†’ С‚РѕР»СЊРєРѕ Started
-        assert_eq!(e1.len(), 1);
-        assert!(matches!(e1[0].1, WatchEvent::Started { .. }));
+        // 9/10 explicit — без Started, только baseline
+        assert!(e1.is_empty());
 
         // 9 в†’ 10: Filled
         let games2 = vec![game(100, "Host#1", 10, 10)];
@@ -520,6 +534,7 @@ mod tests {
 
     #[test]
     fn tick_first_sight_full_emits_filled() {
+        // explicit + taken==total: только Filled (без Started).
         let mut state = WatchState::default();
         let user = state.user_mut(1);
         user.explicit_games.insert(100, WatchedGame { id: 100, map: "TestMap.w3x".into(), host: "Host#1".into(), taken: 0, total: 0 });
@@ -527,10 +542,8 @@ mod tests {
         let mut settings = HashMap::new();
         settings.insert(1, settings_with(1, None, false));
         let e = tick(&mut state, &games, &settings);
-        // Started + Filled
-        assert_eq!(e.len(), 2);
-        assert!(matches!(e[0].1, WatchEvent::Started { .. }));
-        assert!(matches!(e[1].1, WatchEvent::Filled { .. }));
+        assert_eq!(e.len(), 1);
+        assert!(matches!(e[0].1, WatchEvent::Filled { .. }));
     }
 
     // --- tick: cleanup ---
@@ -558,6 +571,8 @@ mod tests {
 
     #[test]
     fn tick_explicit_takes_priority_over_nickname() {
+        // explicit "Watch" подавляет nickname-режим и не эмитит Started
+        // (baseline фиксируется, событий нет).
         let mut state = WatchState::default();
         let user = state.user_mut(1);
         user.explicit_games.insert(100, WatchedGame { id: 100, map: "TestMap.w3x".into(), host: "Host#1".into(), taken: 0, total: 0 });
@@ -566,12 +581,7 @@ mod tests {
         let mut settings = HashMap::new();
         settings.insert(1, settings_with(1, Some("Rutex#2561"), true));
         let e = tick(&mut state, &games, &settings);
-        // С‚РѕР»СЊРєРѕ РѕРґРёРЅ Started (explicit), nickname РЅРµ РґСѓР±Р»РёСЂСѓРµС‚
-        assert_eq!(e.len(), 1);
-        match &e[0].1 {
-            WatchEvent::Started { nickname, .. } => assert!(!*nickname),
-            _ => panic!("expected Started"),
-        }
+        assert!(e.is_empty());
     }
 
     #[test]
@@ -608,6 +618,8 @@ mod tests {
 
     #[test]
     fn tick_multiple_users_independent() {
+        // user 1 с explicit "Watch" — без событий (baseline), user 2 — без
+        // подписки. Проверяем, что user 2 точно не получает ничего.
         let mut state = WatchState::default();
         state.user_mut(1).explicit_games.insert(100, WatchedGame { id: 100, map: "TestMap.w3x".into(), host: "Host#1".into(), taken: 0, total: 0 });
         let games = vec![game(100, "Host#1", 2, 10)];
@@ -616,9 +628,9 @@ mod tests {
         // user 2 вЂ” Р±РµР· РЅР°СЃС‚СЂРѕРµРє
         settings.insert(2, settings_with(2, None, false));
         let e = tick(&mut state, &games, &settings);
-        // С‚РѕР»СЊРєРѕ user 1
-        assert_eq!(e.len(), 1);
-        assert_eq!(e[0].0, 1);
+        assert!(e.is_empty());
+        // user 1 зафиксировал baseline
+        assert!(state.users[&1].last_taken.contains_key(&100));
     }
 
     #[test]
@@ -634,7 +646,7 @@ mod tests {
 
     #[test]
     fn tick_first_sight_does_not_emit_filled_when_zero_taken() {
-        // taken=0 РЅРµ СЃС‡РёС‚Р°РµС‚СЃСЏ "filled" (total > 0)
+        // explicit + taken=0/total=0: ни Started, ни Filled — только baseline.
         let mut state = WatchState::default();
         let user = state.user_mut(1);
         user.explicit_games.insert(100, WatchedGame { id: 100, map: "TestMap.w3x".into(), host: "Host#1".into(), taken: 0, total: 0 });
@@ -642,8 +654,6 @@ mod tests {
         let mut settings = HashMap::new();
         settings.insert(1, settings_with(1, None, false));
         let e = tick(&mut state, &games, &settings);
-        // С‚РѕР»СЊРєРѕ Started, РЅРµ Filled (total=0)
-        assert_eq!(e.len(), 1);
-        assert!(matches!(e[0].1, WatchEvent::Started { .. }));
+        assert!(e.is_empty());
     }
 }

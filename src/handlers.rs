@@ -1058,10 +1058,9 @@ async fn route_callback(
         }
         d if d.starts_with("watch:") => {
             // watch:{game_id} — добавить игру в explicit-список и сразу
-            // перерисовать reply_markup на «Не следить». Сбрасываем
-            // last_taken/last_total, чтобы watcher::tick на ближайшем цикле
-            // увидел «First sight» и эмитил WatchEvent::Started, даже если
-            // эта игра уже была в gamelist до нажатия кнопки.
+            // перерисовать reply_markup на «Не следить». Дальше пользователь
+            // получит только дельты (SlotsDelta/Filled) — без «стартового»
+            // сообщения; для новых игр baseline фиксируется сразу.
             if let Some(id_str) = d.strip_prefix("watch:") {
                 if let Ok(game_id) = id_str.parse::<i64>() {
                     let snapshot = {
@@ -1076,8 +1075,6 @@ async fn route_callback(
                                 total: 0,
                             },
                         );
-                        user.last_taken.remove(&game_id);
-                        user.last_total.remove(&game_id);
                         user.explicit_games.get(&game_id).cloned()
                     };
                     if let (Some(mid), Some(wg)) = (mid, snapshot) {
