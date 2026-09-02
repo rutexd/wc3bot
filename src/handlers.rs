@@ -1057,12 +1057,14 @@ async fn route_callback(
             show_pinned(bot, chat_id, mid, text, kb, state.bot_id).await?;
         }
         d if d.starts_with("watch:") => {
-            // watch:{game_id} — добавить игру в explicit-список.
-            // Game.host/map придёт из tick() когда игра в следующий раз попадёт
-            // в current_games; пока что кладём минимальный снапшот.
+            // watch:{game_id} — добавить игру в explicit-список и сразу
+            // перерисовать reply_markup на «Не следить». Сбрасываем
+            // last_taken/last_total, чтобы watcher::tick на ближайшем цикле
+            // увидел «First sight» и эмитил WatchEvent::Started, даже если
+            // эта игра уже была в gamelist до нажатия кнопки.
             if let Some(id_str) = d.strip_prefix("watch:") {
                 if let Ok(game_id) = id_str.parse::<i64>() {
-                    {
+                    let snapshot = {
                         let mut ws = state.watch_state.lock().unwrap();
                         let user = ws.user_mut(uid);
                         user.explicit_games.entry(game_id).or_insert(
@@ -1074,11 +1076,42 @@ async fn route_callback(
                                 total: 0,
                             },
                         );
-                    } // MutexGuard released here, before await
-                    let _ = bot
-                        .answer_callback_query(cq_id)
-                        .text("👁")
-                        .await;
+                        user.last_taken.remove(&game_id);
+                        user.last_total.remove(&game_id);
+                        user.explicit_games.get(&game_id).cloned()
+                    };
+                    if let (Some(mid), Some(wg)) = (mid, snapshot) {
+                        let user_settings = state.db.get_user_settings(uid);
+                        let lang = state.db.lang(uid);
+                        let g = crate::api::Game {
+                            id: wg.id,
+                            name: String::new(),
+                            host: wg.host,
+                            map: wg.map,
+                            server: String::new(),
+                            slots_taken: wg.taken,
+                            slots_total: wg.total,
+                            created: 0,
+                        };
+                        let (kind, pattern) = state
+                            .db
+                            .list_subs(uid)
+                            .first()
+                            .map(|s| (s.kind.clone(), s.pattern.clone()))
+                            .unwrap_or_else(|| (db::KIND_MAP.to_string(), String::new()));
+                        let _ = bot
+                            .edit_message_reply_markup(chat_id, mid)
+                            .reply_markup(pinger::notification_kb(
+                                lang,
+                                &kind,
+                                &pattern,
+                                &g,
+                                &user_settings,
+                                true,
+                            ))
+                            .await;
+                    }
+                    let _ = bot.answer_callback_query(cq_id).await;
                 }
             }
         }
