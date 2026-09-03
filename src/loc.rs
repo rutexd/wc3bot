@@ -363,7 +363,7 @@ const EN: T = T {
     msg_monitor_started_explicit: "👁 Watching lobby \u{00ab}{map}\u{00ab} by {host} — {taken}/{total} (free: {free})",
     msg_monitor_started_nickname: "👁 I see you in lobby \u{00ab}{map}\u{00ab} by {host} — {taken}/{total} (free: {free})",
     msg_monitor_plus: "+{n} ({taken}/{total}) {map}",
-    msg_monitor_minus: "{delta} ({taken}/{total}) {map}",
+    msg_monitor_minus: "{n} ({taken}/{total}) {map}",
     msg_monitor_filled: "🔥 ({taken}/{total}) {map}",
 };
 

@@ -384,7 +384,7 @@ async fn poller(
                                 .replace("{map}", &game.map)
                         } else {
                             t.msg_monitor_minus
-                                .replace("{delta}", &delta.to_string())
+                                .replace("{n}", &delta.to_string())
                                 .replace("{taken}", &game.slots_taken.to_string())
                                 .replace("{total}", &game.slots_total.to_string())
                                 .replace("{map}", &game.map)
